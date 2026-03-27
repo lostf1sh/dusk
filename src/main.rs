@@ -27,9 +27,10 @@ struct Cli {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    let root = cli.path.canonicalize().map_err(|e| {
-        anyhow::anyhow!("Cannot access '{}': {}", cli.path.display(), e)
-    })?;
+    let root = cli
+        .path
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("Cannot access '{}': {}", cli.path.display(), e))?;
 
     if !root.is_dir() {
         anyhow::bail!("'{}' is not a directory", root.display());

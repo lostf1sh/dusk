@@ -83,8 +83,7 @@ impl TreemapState {
                 continue;
             }
 
-            let dist = (rx as i32 - target_x as i32).pow(2)
-                + (ry as i32 - target_y as i32).pow(2);
+            let dist = (rx as i32 - target_x as i32).pow(2) + (ry as i32 - target_y as i32).pow(2);
             if dist < best_dist {
                 best_dist = dist;
                 best = i;
@@ -265,7 +264,15 @@ fn squarify_recurse(
     let mut row_size: u64 = 0;
     for i in 0..items.len() {
         row_size += items[i].1;
-        let ratio = worst_aspect_ratio(&items[..=i], row_size, total_size, total_area, w, h, layout_vertical);
+        let ratio = worst_aspect_ratio(
+            &items[..=i],
+            row_size,
+            total_size,
+            total_area,
+            w,
+            h,
+            layout_vertical,
+        );
         if ratio <= best_ratio {
             best_ratio = ratio;
             best_split = i + 1;
@@ -394,9 +401,12 @@ mod tests {
 
     fn sample_node() -> DiskNode {
         let mut root = DiskNode::new("root".into(), 100, NodeType::Dir, 0);
-        root.children.push(DiskNode::new("big".into(), 60, NodeType::Dir, 1));
-        root.children.push(DiskNode::new("med".into(), 30, NodeType::File, 1));
-        root.children.push(DiskNode::new("sml".into(), 10, NodeType::File, 1));
+        root.children
+            .push(DiskNode::new("big".into(), 60, NodeType::Dir, 1));
+        root.children
+            .push(DiskNode::new("med".into(), 30, NodeType::File, 1));
+        root.children
+            .push(DiskNode::new("sml".into(), 10, NodeType::File, 1));
         root
     }
 
@@ -431,7 +441,7 @@ mod tests {
 
         // Should be able to navigate between rects
         let next = state.navigate(0, 1, 0); // move right
-        // Just verify it returns a valid index
+                                            // Just verify it returns a valid index
         assert!(next < state.cached_rects.len());
     }
 }

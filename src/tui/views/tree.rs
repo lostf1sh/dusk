@@ -355,7 +355,10 @@ mod tests {
         assert!(rows[0].is_expanded);
         assert_eq!(rows[1].name, "a.dat");
         assert_eq!(rows[1].depth, 2);
-        assert_eq!(rows[1].name_path, vec!["big_dir".to_string(), "a.dat".to_string()]);
+        assert_eq!(
+            rows[1].name_path,
+            vec!["big_dir".to_string(), "a.dat".to_string()]
+        );
         assert_eq!(rows[2].name, "b.dat");
         assert_eq!(rows[3].name, "small_dir");
     }

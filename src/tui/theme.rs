@@ -23,9 +23,13 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            dir_style: Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+            dir_style: Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
             file_style: Style::default().fg(Color::White),
-            symlink_style: Style::default().fg(Color::Cyan).add_modifier(Modifier::ITALIC),
+            symlink_style: Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::ITALIC),
             selected_style: Style::default()
                 .bg(Color::DarkGray)
                 .fg(Color::White)
@@ -35,7 +39,9 @@ impl Default for Theme {
             size_large: Style::default().fg(Color::Red),
             size_medium: Style::default().fg(Color::Yellow),
             size_small: Style::default().fg(Color::Green),
-            spinner_style: Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            spinner_style: Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
             segment_colors: [
                 Color::Blue,
                 Color::Green,

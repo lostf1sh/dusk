@@ -31,10 +31,7 @@ impl Widget for ScanProgress<'_> {
                 Span::raw(self.scan_path),
             ]),
             Line::from(""),
-            Line::from(format!(
-                "Files found:  {}",
-                format_number(self.files_found)
-            )),
+            Line::from(format!("Files found:  {}", format_number(self.files_found))),
             Line::from(format!(
                 "Size found:   {}",
                 format_size(self.bytes_found, BINARY)

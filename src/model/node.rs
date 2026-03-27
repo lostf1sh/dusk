@@ -172,12 +172,18 @@ mod tests {
         let mut root = DiskNode::new("root".into(), 0, NodeType::Dir, 0);
 
         let mut big_dir = DiskNode::new("big_dir".into(), 0, NodeType::Dir, 1);
-        big_dir.children.push(DiskNode::new("a.dat".into(), 300, NodeType::File, 2));
-        big_dir.children.push(DiskNode::new("b.dat".into(), 200, NodeType::File, 2));
+        big_dir
+            .children
+            .push(DiskNode::new("a.dat".into(), 300, NodeType::File, 2));
+        big_dir
+            .children
+            .push(DiskNode::new("b.dat".into(), 200, NodeType::File, 2));
         big_dir.size = 500;
 
         let mut small_dir = DiskNode::new("small_dir".into(), 0, NodeType::Dir, 1);
-        small_dir.children.push(DiskNode::new("c.txt".into(), 10, NodeType::File, 2));
+        small_dir
+            .children
+            .push(DiskNode::new("c.txt".into(), 10, NodeType::File, 2));
         small_dir.size = 10;
 
         let readme = DiskNode::new("readme.md".into(), 1, NodeType::File, 1);

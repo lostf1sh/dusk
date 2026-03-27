@@ -48,8 +48,8 @@ impl StatefulWidget for BarView<'_> {
             .enumerate()
             .map(|(i, child)| {
                 let pct = child.size as f64 / parent_size as f64 * 100.0;
-                let fill_count = (bar_width as f64 * child.size as f64 / parent_size as f64)
-                    .round() as usize;
+                let fill_count =
+                    (bar_width as f64 * child.size as f64 / parent_size as f64).round() as usize;
                 let empty_count = bar_width.saturating_sub(fill_count);
 
                 let fill_str: String = "█".repeat(fill_count);

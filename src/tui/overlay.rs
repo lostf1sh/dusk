@@ -23,9 +23,7 @@ pub enum Overlay {
         size: u64,
     },
     /// File info popup.
-    FileInfo {
-        lines: Vec<String>,
-    },
+    FileInfo { lines: Vec<String> },
     /// Bookmark list.
     BookmarkList {
         bookmarks: Vec<Bookmark>,
@@ -44,13 +42,9 @@ pub enum Overlay {
     /// Filter mode submenu.
     FilterMenu,
     /// Extension filter input.
-    FilterExtInput {
-        input: TextInputState,
-    },
+    FilterExtInput { input: TextInputState },
     /// Status flash message (auto-dismiss on any key).
-    Flash {
-        message: String,
-    },
+    Flash { message: String },
 }
 
 /// Pre-collected node entry for search (built once when overlay opens).
@@ -240,18 +234,18 @@ pub fn handle_overlay_key(overlay: &mut Overlay, key: KeyEvent) -> OverlayAction
                 min: Some(SIZE_PRESETS[3].0),
                 max: None,
             }),
-            KeyCode::Char('d') => OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(
-                DATE_PRESETS[0].0,
-            )),
-            KeyCode::Char('w') => OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(
-                DATE_PRESETS[1].0,
-            )),
-            KeyCode::Char('m') => OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(
-                DATE_PRESETS[2].0,
-            )),
-            KeyCode::Char('y') => OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(
-                DATE_PRESETS[3].0,
-            )),
+            KeyCode::Char('d') => {
+                OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(DATE_PRESETS[0].0))
+            }
+            KeyCode::Char('w') => {
+                OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(DATE_PRESETS[1].0))
+            }
+            KeyCode::Char('m') => {
+                OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(DATE_PRESETS[2].0))
+            }
+            KeyCode::Char('y') => {
+                OverlayAction::ApplyFilter(FilterCriteria::ModifiedWithin(DATE_PRESETS[3].0))
+            }
             _ => OverlayAction::Consumed,
         },
         Overlay::FilterExtInput { input } => match key.code {
@@ -260,9 +254,7 @@ pub fn handle_overlay_key(overlay: &mut Overlay, key: KeyEvent) -> OverlayAction
                 if input.query.is_empty() {
                     OverlayAction::ClearFilter
                 } else {
-                    OverlayAction::ApplyFilter(FilterCriteria::Extension(
-                        input.query.clone(),
-                    ))
+                    OverlayAction::ApplyFilter(FilterCriteria::Extension(input.query.clone()))
                 }
             }
             KeyCode::Backspace => {
@@ -304,17 +296,11 @@ pub fn render_overlay(frame: &mut Frame, overlay: &mut Overlay, theme: &Theme) {
                 Line::from(""),
                 Line::from(vec![
                     Span::raw("  Delete "),
-                    Span::styled(
-                        type_str,
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(type_str, Style::default().add_modifier(Modifier::BOLD)),
                     Span::raw(format!(" \"{node_name}\" ({size_str})?")),
                 ]),
                 Line::from(""),
-                Line::from(Span::styled(
-                    "  [y] Yes   [n] No",
-                    theme.status_style,
-                )),
+                Line::from(Span::styled("  [y] Yes   [n] No", theme.status_style)),
             ];
 
             let block = Block::bordered()
@@ -359,8 +345,7 @@ pub fn render_overlay(frame: &mut Frame, overlay: &mut Overlay, theme: &Theme) {
                     .border_style(theme.border_style);
                 frame.render_widget(Clear, area);
                 frame.render_widget(
-                    Paragraph::new("  No bookmarks yet. Press 'b' to add one.")
-                        .block(block),
+                    Paragraph::new("  No bookmarks yet. Press 'b' to add one.").block(block),
                     area,
                 );
             } else {
@@ -369,12 +354,14 @@ pub fn render_overlay(frame: &mut Frame, overlay: &mut Overlay, theme: &Theme) {
                     .map(|bm| {
                         let line = Line::from(vec![
                             Span::styled("  ", Style::default()),
-                            Span::styled(&bm.label, Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-                            Span::raw("  "),
                             Span::styled(
-                                bm.path.to_string_lossy().to_string(),
-                                theme.status_style,
+                                &bm.label,
+                                Style::default()
+                                    .fg(Color::Blue)
+                                    .add_modifier(Modifier::BOLD),
                             ),
+                            Span::raw("  "),
+                            Span::styled(bm.path.to_string_lossy().to_string(), theme.status_style),
                         ]);
                         ListItem::new(line)
                     })
@@ -419,11 +406,8 @@ pub fn render_overlay(frame: &mut Frame, overlay: &mut Overlay, theme: &Theme) {
 
             if inner.height > 0 {
                 // Text input on first row
-                let [input_area, results_area] = Layout::vertical([
-                    Constraint::Length(1),
-                    Constraint::Fill(1),
-                ])
-                .areas(inner);
+                let [input_area, results_area] =
+                    Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(inner);
 
                 let text_input = TextInput {
                     query: &input.query,
@@ -441,7 +425,9 @@ pub fn render_overlay(frame: &mut Frame, overlay: &mut Overlay, theme: &Theme) {
                             ListItem::new(Line::from(vec![
                                 Span::styled(
                                     format!("  {}", r.name),
-                                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(Color::White)
+                                        .add_modifier(Modifier::BOLD),
                                 ),
                                 Span::raw("  "),
                                 Span::styled(path_str, theme.status_style),

@@ -16,7 +16,9 @@ impl Widget for TextInput<'_> {
             return;
         }
 
-        let label_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+        let label_style = Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD);
         let text_style = Style::default().fg(Color::White);
         let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
 
@@ -34,18 +36,24 @@ impl Widget for TextInput<'_> {
         } else {
             0
         };
-        let visible_text: String = self.query.chars().skip(visible_start).take(available).collect();
+        let visible_text: String = self
+            .query
+            .chars()
+            .skip(visible_start)
+            .take(available)
+            .collect();
         buf.set_string(text_start, area.y, &visible_text, text_style);
 
         // Render cursor
         let cursor_screen_pos = text_start + (self.cursor - visible_start) as u16;
         if cursor_screen_pos < area.x + area.width {
-            let cursor_char = self
-                .query
-                .chars()
-                .nth(self.cursor)
-                .unwrap_or(' ');
-            buf.set_string(cursor_screen_pos, area.y, cursor_char.to_string(), cursor_style);
+            let cursor_char = self.query.chars().nth(self.cursor).unwrap_or(' ');
+            buf.set_string(
+                cursor_screen_pos,
+                area.y,
+                cursor_char.to_string(),
+                cursor_style,
+            );
         }
     }
 }

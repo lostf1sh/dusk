@@ -19,12 +19,11 @@ use ratatui::Frame;
 use crate::config::bookmarks::BookmarkStore;
 use crate::model::metadata::load_metadata;
 use crate::model::node::{DiskNode, SortConfig};
-use crate::tui::filter::FilterCriteria;
 use crate::scanner::walker::ScanUpdate;
+use crate::tui::filter::FilterCriteria;
 use crate::tui::overlay::{
     handle_overlay_key, render_overlay, Overlay, OverlayAction, SearchEntry, SearchResult,
 };
-use crate::tui::widgets::text_input::TextInputState;
 use crate::tui::theme::Theme;
 use crate::tui::views::bar::{BarState, BarView};
 use crate::tui::views::nav::ViewNavState;
@@ -34,6 +33,7 @@ use crate::tui::views::tree::{
 };
 use crate::tui::views::treemap::{TreemapState, TreemapView};
 use crate::tui::widgets::progress::ScanProgress;
+use crate::tui::widgets::text_input::TextInputState;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -179,8 +179,7 @@ impl App {
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     if matches!(self.state, AppState::Scanning { .. }) {
-                        self.state =
-                            AppState::Error("Scanner terminated unexpectedly".to_string());
+                        self.state = AppState::Error("Scanner terminated unexpectedly".to_string());
                     }
                     break;
                 }
@@ -305,7 +304,8 @@ impl App {
                 KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     sort_config.ascending = !sort_config.ascending;
                     root.sort_children(sort_config);
-                    *flat_rows = flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
+                    *flat_rows =
+                        flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
                     treemap_state.invalidate();
                     bar_state.sync_selection(nav.selected_child);
                     return false;
@@ -313,21 +313,17 @@ impl App {
                 KeyCode::Char('s') => {
                     sort_config.field = sort_config.field.next();
                     root.sort_children(sort_config);
-                    *flat_rows = flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
+                    *flat_rows =
+                        flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
                     treemap_state.invalidate();
                     bar_state.sync_selection(nav.selected_child);
                     return false;
                 }
                 KeyCode::Char('i') => {
-                    let path_indices = selected_path_from_state(
-                        self.view_mode,
-                        flat_rows,
-                        tree_state,
-                        nav,
-                    );
+                    let path_indices =
+                        selected_path_from_state(self.view_mode, flat_rows, tree_state, nav);
                     if let Some(path_indices) = path_indices {
-                        if let Some(fs_path) =
-                            resolve_fs_path(&self.root_path, root, &path_indices)
+                        if let Some(fs_path) = resolve_fs_path(&self.root_path, root, &path_indices)
                         {
                             let node_name = resolve_node(root, &path_indices)
                                 .map(|n| n.name.clone())
@@ -349,15 +345,10 @@ impl App {
                     return false;
                 }
                 KeyCode::Char('d') => {
-                    let path_indices = selected_path_from_state(
-                        self.view_mode,
-                        flat_rows,
-                        tree_state,
-                        nav,
-                    );
+                    let path_indices =
+                        selected_path_from_state(self.view_mode, flat_rows, tree_state, nav);
                     if let Some(path_indices) = path_indices {
-                        if let Some(fs_path) =
-                            resolve_fs_path(&self.root_path, root, &path_indices)
+                        if let Some(fs_path) = resolve_fs_path(&self.root_path, root, &path_indices)
                         {
                             if let Some(node) = resolve_node(root, &path_indices) {
                                 self.overlay = Some(Overlay::DeleteConfirm {
@@ -415,11 +406,7 @@ impl App {
                                     if node.node_type == crate::model::NodeType::Dir {
                                         resolve_fs_path(&self.root_path, root, &pi)
                                     } else if pi.len() > 1 {
-                                        resolve_fs_path(
-                                            &self.root_path,
-                                            root,
-                                            &pi[..pi.len() - 1],
-                                        )
+                                        resolve_fs_path(&self.root_path, root, &pi[..pi.len() - 1])
                                     } else {
                                         Some(self.root_path.clone())
                                     }
@@ -478,10 +465,7 @@ impl App {
     }
 
     fn switch_to_nav_view(&mut self, mode: ViewMode) {
-        if let AppState::Browsing {
-            treemap_state, ..
-        } = &mut self.state
-        {
+        if let AppState::Browsing { treemap_state, .. } = &mut self.state {
             if mode == ViewMode::Treemap {
                 treemap_state.invalidate();
             }
@@ -513,14 +497,14 @@ impl App {
             let mut scored: Vec<SearchResult> = all_entries
                 .iter()
                 .filter_map(|entry| {
-                    matcher.fuzzy_match(&entry.name, query).map(|score| {
-                        SearchResult {
+                    matcher
+                        .fuzzy_match(&entry.name, query)
+                        .map(|score| SearchResult {
                             name: entry.name.clone(),
                             path_indices: entry.path_indices.clone(),
                             name_path: entry.name_path.clone(),
                             score,
-                        }
-                    })
+                        })
                 })
                 .collect();
 
@@ -588,8 +572,7 @@ impl App {
         } = &mut self.state
         {
             *active_filter = criteria;
-            *flat_rows =
-                flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
+            *flat_rows = flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
             tree_state.clamp_cursor(flat_rows.len());
         }
     }
@@ -619,11 +602,7 @@ impl App {
                 let mut found = true;
 
                 for component in &components {
-                    if let Some(idx) = current
-                        .children
-                        .iter()
-                        .position(|c| c.name == *component)
-                    {
+                    if let Some(idx) = current.children.iter().position(|c| c.name == *component) {
                         path_indices.push(idx);
                         current = &current.children[idx];
                     } else {
@@ -646,7 +625,8 @@ impl App {
                             tree_state.expanded.insert(name_path.clone());
                         }
                     }
-                    *flat_rows = flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
+                    *flat_rows =
+                        flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
                     // Find the cursor position for the target
                     if let Some(pos) = flat_rows
                         .iter()
@@ -700,7 +680,8 @@ impl App {
                 } = &mut self.state
                 {
                     root.remove_node(path_indices);
-                    *flat_rows = flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
+                    *flat_rows =
+                        flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
                     tree_state.clamp_cursor(flat_rows.len());
 
                     // Clamp nav selection
@@ -1143,10 +1124,7 @@ fn build_info_lines<'a>(node: &'a DiskNode, root_size: u64, theme: &Theme) -> Ve
 
         if !node.children.is_empty() {
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "  Largest:",
-                theme.status_style,
-            )));
+            lines.push(Line::from(Span::styled("  Largest:", theme.status_style)));
             for child in node.children.iter().take(5) {
                 let icon = match child.node_type {
                     crate::model::NodeType::Dir => "d ",

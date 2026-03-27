@@ -82,8 +82,12 @@ mod tests {
     fn sample_tree() -> DiskNode {
         let mut root = DiskNode::new("root".into(), 511, NodeType::Dir, 0);
         let mut big_dir = DiskNode::new("big_dir".into(), 500, NodeType::Dir, 1);
-        big_dir.children.push(DiskNode::new("a.dat".into(), 300, NodeType::File, 2));
-        big_dir.children.push(DiskNode::new("b.dat".into(), 200, NodeType::File, 2));
+        big_dir
+            .children
+            .push(DiskNode::new("a.dat".into(), 300, NodeType::File, 2));
+        big_dir
+            .children
+            .push(DiskNode::new("b.dat".into(), 200, NodeType::File, 2));
         let small_dir = DiskNode::new("small_dir".into(), 10, NodeType::Dir, 1);
         let readme = DiskNode::new("readme.md".into(), 1, NodeType::File, 1);
         root.children.push(big_dir);

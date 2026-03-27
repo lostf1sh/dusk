@@ -8,10 +8,7 @@ pub enum FilterCriteria {
     /// Filter by file extension (e.g., "rs", "txt").
     Extension(String),
     /// Filter by size range.
-    SizeRange {
-        min: Option<u64>,
-        max: Option<u64>,
-    },
+    SizeRange { min: Option<u64>, max: Option<u64> },
     /// Filter files modified within last N days.
     ModifiedWithin(u64),
 }
@@ -60,24 +57,22 @@ impl FilterCriteria {
     pub fn label(&self) -> String {
         match self {
             FilterCriteria::Extension(ext) => format!("*.{ext}"),
-            FilterCriteria::SizeRange { min, max } => {
-                match (min, max) {
-                    (Some(min), Some(max)) => {
-                        format!(
-                            "{}-{}",
-                            humansize::format_size(*min, humansize::BINARY),
-                            humansize::format_size(*max, humansize::BINARY),
-                        )
-                    }
-                    (Some(min), None) => {
-                        format!(">{}", humansize::format_size(*min, humansize::BINARY))
-                    }
-                    (None, Some(max)) => {
-                        format!("<{}", humansize::format_size(*max, humansize::BINARY))
-                    }
-                    (None, None) => "all sizes".into(),
+            FilterCriteria::SizeRange { min, max } => match (min, max) {
+                (Some(min), Some(max)) => {
+                    format!(
+                        "{}-{}",
+                        humansize::format_size(*min, humansize::BINARY),
+                        humansize::format_size(*max, humansize::BINARY),
+                    )
                 }
-            }
+                (Some(min), None) => {
+                    format!(">{}", humansize::format_size(*min, humansize::BINARY))
+                }
+                (None, Some(max)) => {
+                    format!("<{}", humansize::format_size(*max, humansize::BINARY))
+                }
+                (None, None) => "all sizes".into(),
+            },
             FilterCriteria::ModifiedWithin(days) => format!("last {days}d"),
         }
     }
