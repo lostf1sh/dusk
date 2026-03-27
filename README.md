@@ -96,11 +96,11 @@ Navigate with `j`/`k`, **Enter** to jump, `d` to remove.
 │  Visualization (65%)                             │  Info Panel      │
 │  Tree / Treemap / Bar                            │                  │
 │                                                  │  Name: src/      │
-│                                                  │  Type: Directory  │
+│                                                  │  Type: Directory │
 │                                                  │  Size: 1.2 GiB   │
 │                                                  │                  │
 ├──────────────────────────────────────────────────┴──────────────────┤
-│ Total: 1.2 GiB  │  Files: 4832  │  0.3s  │  [1:Tree] 2:Map 3:Bar │
+│ Total: 1.2 GiB  │  Files: 4832  │  0.3s  │  [1:Tree] 2:Map 3:Bar    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
