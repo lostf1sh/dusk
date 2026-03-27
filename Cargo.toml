@@ -2,7 +2,7 @@
 name = "dusk"
 version = "0.1.0"
 edition = "2021"
-description = "Interactive disk usage analyzer with treemap & sunburst visualization for your terminal"
+description = "Interactive disk usage analyzer with treemap visualization for your terminal"
 
 [dependencies]
 ratatui = "0.29"
