@@ -7,6 +7,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, StatefulWidget};
 
 use crate::model::node::{DiskNode, NodeType};
+use crate::tui::filter::FilterCriteria;
 use crate::tui::theme::Theme;
 
 /// A single visible row in the flattened tree.
@@ -20,12 +21,14 @@ pub struct FlatRow {
     pub is_expanded: bool,
     /// Index path from root to this node (e.g., [0, 2, 1] = root.children[0].children[2].children[1]).
     pub path_indices: Vec<usize>,
+    /// Name path from root to this node (stable across sort/delete).
+    pub name_path: Vec<String>,
 }
 
 /// Navigation and display state for the tree view.
 pub struct TreeViewState {
     pub cursor: usize,
-    pub expanded: HashSet<Vec<usize>>,
+    pub expanded: HashSet<Vec<String>>,
     pub list_state: ListState,
 }
 
@@ -57,9 +60,9 @@ impl TreeViewState {
     pub fn toggle_expand(&mut self, rows: &[FlatRow]) {
         if let Some(row) = rows.get(self.cursor) {
             if row.node_type == NodeType::Dir && row.has_children {
-                let path = row.path_indices.clone();
-                if !self.expanded.remove(&path) {
-                    self.expanded.insert(path);
+                let name_path = row.name_path.clone();
+                if !self.expanded.remove(&name_path) {
+                    self.expanded.insert(name_path);
                 }
             }
         }
@@ -69,8 +72,8 @@ impl TreeViewState {
     pub fn drill_in(&mut self, rows: &[FlatRow]) {
         if let Some(row) = rows.get(self.cursor) {
             if row.node_type == NodeType::Dir && row.has_children {
-                let path = row.path_indices.clone();
-                self.expanded.insert(path);
+                let name_path = row.name_path.clone();
+                self.expanded.insert(name_path);
                 // After re-flatten, the first child will be at cursor + 1
                 self.cursor += 1;
                 self.list_state.select(Some(self.cursor));
@@ -82,18 +85,18 @@ impl TreeViewState {
     pub fn drill_out(&mut self, rows: &[FlatRow]) {
         if let Some(row) = rows.get(self.cursor) {
             // If we're on an expanded dir, collapse it
-            if row.node_type == NodeType::Dir && self.expanded.contains(&row.path_indices) {
-                self.expanded.remove(&row.path_indices);
+            if row.node_type == NodeType::Dir && self.expanded.contains(&row.name_path) {
+                self.expanded.remove(&row.name_path);
                 return;
             }
 
             // Otherwise, find and move to parent
-            if row.path_indices.len() > 1 {
-                let parent_path: Vec<usize> =
-                    row.path_indices[..row.path_indices.len() - 1].to_vec();
+            if row.name_path.len() > 1 {
+                let parent_name_path: Vec<String> =
+                    row.name_path[..row.name_path.len() - 1].to_vec();
                 // Find the parent row
                 for (i, r) in rows.iter().enumerate() {
-                    if r.path_indices == parent_path {
+                    if r.name_path == parent_name_path {
                         self.cursor = i;
                         self.list_state.select(Some(self.cursor));
                         return;
@@ -102,25 +105,67 @@ impl TreeViewState {
             }
         }
     }
+
+    /// Clamp cursor to valid range after tree mutation.
+    pub fn clamp_cursor(&mut self, row_count: usize) {
+        if row_count == 0 {
+            self.cursor = 0;
+        } else if self.cursor >= row_count {
+            self.cursor = row_count - 1;
+        }
+        self.list_state.select(Some(self.cursor));
+    }
 }
 
 /// Flatten the tree into visible rows based on which directories are expanded.
-pub fn flatten_tree(root: &DiskNode, expanded: &HashSet<Vec<usize>>) -> Vec<FlatRow> {
+pub fn flatten_tree(root: &DiskNode, expanded: &HashSet<Vec<String>>) -> Vec<FlatRow> {
+    flatten_tree_filtered(root, expanded, None)
+}
+
+/// Flatten the tree with optional filter.
+pub fn flatten_tree_filtered(
+    root: &DiskNode,
+    expanded: &HashSet<Vec<String>>,
+    filter: Option<&FilterCriteria>,
+) -> Vec<FlatRow> {
     let mut rows = Vec::new();
-    flatten_children(&root.children, expanded, &mut Vec::new(), &mut rows);
+    flatten_children(
+        &root.children,
+        expanded,
+        filter,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &mut rows,
+    );
     rows
 }
 
 fn flatten_children(
     children: &[DiskNode],
-    expanded: &HashSet<Vec<usize>>,
-    parent_path: &mut Vec<usize>,
+    expanded: &HashSet<Vec<String>>,
+    filter: Option<&FilterCriteria>,
+    parent_indices: &mut Vec<usize>,
+    parent_names: &mut Vec<String>,
     rows: &mut Vec<FlatRow>,
 ) {
     for (i, child) in children.iter().enumerate() {
-        parent_path.push(i);
-        let path_indices = parent_path.clone();
-        let is_expanded = expanded.contains(&path_indices);
+        // Apply filter: skip non-matching files, but always show dirs
+        if let Some(f) = filter {
+            if !f.matches(child) {
+                continue;
+            }
+            // For directories: skip if no descendants match
+            if child.node_type == NodeType::Dir && !has_matching_descendant(child, f) {
+                continue;
+            }
+        }
+
+        parent_indices.push(i);
+        parent_names.push(child.name.clone());
+
+        let path_indices = parent_indices.clone();
+        let name_path = parent_names.clone();
+        let is_expanded = expanded.contains(&name_path);
 
         rows.push(FlatRow {
             depth: child.depth,
@@ -130,14 +175,36 @@ fn flatten_children(
             has_children: !child.children.is_empty(),
             is_expanded,
             path_indices,
+            name_path,
         });
 
         if is_expanded {
-            flatten_children(&child.children, expanded, parent_path, rows);
+            flatten_children(
+                &child.children,
+                expanded,
+                filter,
+                parent_indices,
+                parent_names,
+                rows,
+            );
         }
 
-        parent_path.pop();
+        parent_indices.pop();
+        parent_names.pop();
     }
+}
+
+/// Check if a directory has any descendant that matches the filter.
+fn has_matching_descendant(node: &DiskNode, filter: &FilterCriteria) -> bool {
+    for child in &node.children {
+        if child.node_type != NodeType::Dir && filter.matches(child) {
+            return true;
+        }
+        if child.node_type == NodeType::Dir && has_matching_descendant(child, filter) {
+            return true;
+        }
+    }
+    false
 }
 
 /// The tree view widget. Renders the flat rows as a navigable list.
@@ -207,6 +274,31 @@ pub fn resolve_node<'a>(root: &'a DiskNode, path: &[usize]) -> Option<&'a DiskNo
     Some(node)
 }
 
+/// Resolve a path_indices to a mutable DiskNode reference.
+#[allow(dead_code)]
+pub fn resolve_node_mut<'a>(root: &'a mut DiskNode, path: &[usize]) -> Option<&'a mut DiskNode> {
+    let mut node = root;
+    for &idx in path {
+        node = node.children.get_mut(idx)?;
+    }
+    Some(node)
+}
+
+/// Build the absolute filesystem path for a node identified by path_indices.
+pub fn resolve_fs_path(
+    root_path: &std::path::Path,
+    root: &DiskNode,
+    path_indices: &[usize],
+) -> Option<std::path::PathBuf> {
+    let mut fs_path = root_path.to_path_buf();
+    let mut node = root;
+    for &idx in path_indices {
+        node = node.children.get(idx)?;
+        fs_path.push(&node.name);
+    }
+    Some(fs_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +337,7 @@ mod tests {
         assert_eq!(rows.len(), 3); // big_dir, small_dir, readme.md
         assert_eq!(rows[0].name, "big_dir");
         assert!(!rows[0].is_expanded);
+        assert_eq!(rows[0].name_path, vec!["big_dir"]);
         assert_eq!(rows[1].name, "small_dir");
         assert_eq!(rows[2].name, "readme.md");
     }
@@ -253,7 +346,7 @@ mod tests {
     fn test_flatten_expanded() {
         let tree = sample_tree();
         let mut expanded = HashSet::new();
-        expanded.insert(vec![0]); // expand big_dir
+        expanded.insert(vec!["big_dir".to_string()]); // expand big_dir by name
 
         let rows = flatten_tree(&tree, &expanded);
 
@@ -262,6 +355,7 @@ mod tests {
         assert!(rows[0].is_expanded);
         assert_eq!(rows[1].name, "a.dat");
         assert_eq!(rows[1].depth, 2);
+        assert_eq!(rows[1].name_path, vec!["big_dir".to_string(), "a.dat".to_string()]);
         assert_eq!(rows[2].name, "b.dat");
         assert_eq!(rows[3].name, "small_dir");
     }
@@ -317,5 +411,24 @@ mod tests {
         assert_eq!(node.name, "b.dat");
 
         assert!(resolve_node(&tree, &[5]).is_none());
+    }
+
+    #[test]
+    fn test_resolve_fs_path() {
+        let tree = sample_tree();
+        let root_path = std::path::Path::new("/tmp/test");
+        let fs_path = resolve_fs_path(root_path, &tree, &[0, 1]).unwrap();
+        assert_eq!(fs_path, std::path::PathBuf::from("/tmp/test/big_dir/b.dat"));
+    }
+
+    #[test]
+    fn test_clamp_cursor() {
+        let mut state = TreeViewState::new();
+        state.cursor = 10;
+        state.clamp_cursor(3);
+        assert_eq!(state.cursor, 2);
+
+        state.clamp_cursor(0);
+        assert_eq!(state.cursor, 0);
     }
 }

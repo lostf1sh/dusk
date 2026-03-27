@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
+use std::time::SystemTime;
 
 use crate::model::node::{DiskNode, NodeType};
 use crate::scanner::ignore_rules::build_walk;
@@ -16,6 +17,7 @@ struct RawEntry {
     path: PathBuf,
     size: u64,
     node_type: NodeType,
+    modified: Option<SystemTime>,
 }
 
 /// Run a full directory scan. Meant to be called on a spawned thread.
@@ -73,10 +75,13 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
         files_found += 1;
         bytes_found += size;
 
+        let modified = metadata.modified().ok();
+
         entries.push(RawEntry {
             path,
             size,
             node_type,
+            modified,
         });
 
         // Send progress every 500 entries
@@ -114,16 +119,19 @@ fn build_tree(root: &Path, entries: &[RawEntry]) -> DiskNode {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_node(
         path: &Path,
         name: String,
         node_type: NodeType,
         own_size: u64,
+        modified: Option<SystemTime>,
         depth: usize,
         entries: &[RawEntry],
         children_map: &HashMap<PathBuf, Vec<usize>>,
     ) -> DiskNode {
         let mut node = DiskNode::new(name, own_size, node_type, depth);
+        node.modified = modified;
 
         if let Some(child_indices) = children_map.get(path) {
             for &idx in child_indices {
@@ -139,6 +147,7 @@ fn build_tree(root: &Path, entries: &[RawEntry]) -> DiskNode {
                     child_name,
                     child_entry.node_type.clone(),
                     child_entry.size,
+                    child_entry.modified,
                     depth + 1,
                     entries,
                     children_map,
@@ -165,6 +174,7 @@ fn build_tree(root: &Path, entries: &[RawEntry]) -> DiskNode {
         root_name,
         NodeType::Dir,
         0,
+        None,
         0,
         entries,
         &children_map,

@@ -1,3 +1,4 @@
+mod config;
 mod model;
 mod scanner;
 mod tui;
@@ -17,6 +18,10 @@ struct Cli {
     /// Directory to scan (defaults to current directory)
     #[arg(default_value = ".")]
     path: PathBuf,
+
+    /// Permanently delete files instead of moving to trash
+    #[arg(long)]
+    no_trash: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -38,7 +43,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     let mut terminal = ratatui::init();
-    let mut app = tui::App::new(root, rx);
+    let mut app = tui::App::new(root, rx, !cli.no_trash);
     let result = app.run(&mut terminal);
     ratatui::restore();
 
