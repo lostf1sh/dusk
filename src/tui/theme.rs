@@ -13,6 +13,11 @@ pub struct Theme {
     pub size_medium: Style,
     pub size_small: Style,
     pub spinner_style: Style,
+    /// Rotating palette for treemap/sunburst segment distinction.
+    pub segment_colors: [Color; 8],
+    pub bar_empty: Style,
+    pub view_indicator_active: Style,
+    pub view_indicator_inactive: Style,
 }
 
 impl Default for Theme {
@@ -31,6 +36,21 @@ impl Default for Theme {
             size_medium: Style::default().fg(Color::Yellow),
             size_small: Style::default().fg(Color::Green),
             spinner_style: Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            segment_colors: [
+                Color::Blue,
+                Color::Green,
+                Color::Red,
+                Color::Yellow,
+                Color::Magenta,
+                Color::Cyan,
+                Color::LightBlue,
+                Color::LightGreen,
+            ],
+            bar_empty: Style::default().fg(Color::DarkGray),
+            view_indicator_active: Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+            view_indicator_inactive: Style::default().fg(Color::DarkGray),
         }
     }
 }
@@ -43,6 +63,11 @@ impl Theme {
             NodeType::File => self.file_style,
             NodeType::Symlink => self.symlink_style,
         }
+    }
+
+    /// Pick a color from the rotating segment palette.
+    pub fn segment_color(&self, index: usize) -> Color {
+        self.segment_colors[index % self.segment_colors.len()]
     }
 
     /// Pick a size style based on proportion of parent.

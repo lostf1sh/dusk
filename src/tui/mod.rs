@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use humansize::{format_size, BINARY};
-use ratatui::layout::{Alignment, Constraint, Layout};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
@@ -17,8 +17,47 @@ use ratatui::Frame;
 use crate::model::node::DiskNode;
 use crate::scanner::walker::ScanUpdate;
 use crate::tui::theme::Theme;
+use crate::tui::views::bar::{BarState, BarView};
+use crate::tui::views::nav::ViewNavState;
+use crate::tui::views::sunburst::{SunburstState, SunburstView};
 use crate::tui::views::tree::{flatten_tree, resolve_node, FlatRow, TreeView, TreeViewState};
+use crate::tui::views::treemap::{TreemapState, TreemapView};
 use crate::tui::widgets::progress::ScanProgress;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Tree,
+    Treemap,
+    Sunburst,
+    Bar,
+}
+
+impl ViewMode {
+    fn label(self) -> &'static str {
+        match self {
+            ViewMode::Tree => "Tree",
+            ViewMode::Treemap => "Map",
+            ViewMode::Sunburst => "Sun",
+            ViewMode::Bar => "Bar",
+        }
+    }
+
+    fn key(self) -> char {
+        match self {
+            ViewMode::Tree => '1',
+            ViewMode::Treemap => '2',
+            ViewMode::Sunburst => '3',
+            ViewMode::Bar => '4',
+        }
+    }
+
+    const ALL: [ViewMode; 4] = [
+        ViewMode::Tree,
+        ViewMode::Treemap,
+        ViewMode::Sunburst,
+        ViewMode::Bar,
+    ];
+}
 
 enum AppState {
     Scanning {
@@ -27,15 +66,23 @@ enum AppState {
         spinner_tick: usize,
     },
     Browsing {
-        root: DiskNode,
-        tree_state: TreeViewState,
+        root: Box<DiskNode>,
+        // Tree view state
+        tree_state: Box<TreeViewState>,
         flat_rows: Vec<FlatRow>,
+        // Shared nav for non-tree views
+        nav: ViewNavState,
+        // Per-view state
+        bar_state: BarState,
+        treemap_state: TreemapState,
+        sunburst_state: SunburstState,
     },
     Error(String),
 }
 
 pub struct App {
     state: AppState,
+    view_mode: ViewMode,
     scan_rx: Receiver<ScanUpdate>,
     root_path: PathBuf,
     scan_start: Instant,
@@ -51,6 +98,7 @@ impl App {
                 bytes_found: 0,
                 spinner_tick: 0,
             },
+            view_mode: ViewMode::Tree,
             scan_rx,
             root_path,
             scan_start: Instant::now(),
@@ -103,9 +151,13 @@ impl App {
                     let tree_state = TreeViewState::new();
                     let flat_rows = flatten_tree(&root, &tree_state.expanded);
                     self.state = AppState::Browsing {
-                        root,
-                        tree_state,
+                        root: Box::new(root),
+                        tree_state: Box::new(tree_state),
                         flat_rows,
+                        nav: ViewNavState::new(),
+                        bar_state: BarState::new(),
+                        treemap_state: TreemapState::new(),
+                        sunburst_state: SunburstState::new(),
                     };
                 }
                 Ok(ScanUpdate::Error(msg)) => {
@@ -113,7 +165,6 @@ impl App {
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    // Scanner thread died without sending Complete
                     if matches!(self.state, AppState::Scanning { .. }) {
                         self.state =
                             AppState::Error("Scanner terminated unexpectedly".to_string());
@@ -131,44 +182,83 @@ impl App {
             _ => {}
         }
 
+        // View switching (available in browsing state)
+        if matches!(self.state, AppState::Browsing { .. }) {
+            match key.code {
+                KeyCode::Char('1') => {
+                    self.view_mode = ViewMode::Tree;
+                    return false;
+                }
+                KeyCode::Char('2') => {
+                    self.switch_to_nav_view(ViewMode::Treemap);
+                    return false;
+                }
+                KeyCode::Char('3') => {
+                    self.switch_to_nav_view(ViewMode::Sunburst);
+                    return false;
+                }
+                KeyCode::Char('4') => {
+                    self.switch_to_nav_view(ViewMode::Bar);
+                    return false;
+                }
+                _ => {}
+            }
+        }
+
         if let AppState::Browsing {
             root,
             tree_state,
             flat_rows,
+            nav,
+            bar_state,
+            treemap_state,
+            sunburst_state,
         } = &mut self.state
         {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    tree_state.move_down(flat_rows.len());
+            match self.view_mode {
+                ViewMode::Tree => {
+                    handle_tree_key(key, root, tree_state, flat_rows);
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    tree_state.move_up();
+                ViewMode::Bar => {
+                    handle_nav_key(key, nav, root);
+                    bar_state.sync_selection(nav.selected_child);
                 }
-                KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
-                    tree_state.drill_in(flat_rows);
-                    *flat_rows = flatten_tree(root, &tree_state.expanded);
+                ViewMode::Treemap => {
+                    handle_treemap_key(key, nav, root, treemap_state);
                 }
-                KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => {
-                    tree_state.drill_out(flat_rows);
-                    *flat_rows = flatten_tree(root, &tree_state.expanded);
+                ViewMode::Sunburst => {
+                    handle_sunburst_key(key, nav, root, sunburst_state);
                 }
-                KeyCode::Char(' ') => {
-                    tree_state.toggle_expand(flat_rows);
-                    *flat_rows = flatten_tree(root, &tree_state.expanded);
-                }
-                _ => {}
             }
         }
 
         false
     }
 
+    fn switch_to_nav_view(&mut self, mode: ViewMode) {
+        if let AppState::Browsing {
+            treemap_state,
+            sunburst_state,
+            ..
+        } = &mut self.state
+        {
+            // Invalidate cached layouts when switching views
+            if mode == ViewMode::Treemap {
+                treemap_state.invalidate();
+            }
+            if mode == ViewMode::Sunburst {
+                sunburst_state.invalidate();
+            }
+        }
+        self.view_mode = mode;
+    }
+
     fn render(&mut self, frame: &mut Frame) {
-        // Extract immutable fields before matching on state
         let elapsed = self.scan_start.elapsed();
         let root_path_str = self.root_path.to_string_lossy().to_string();
         let theme = &self.theme;
         let total_scan_time = self.total_scan_time;
+        let view_mode = self.view_mode;
 
         match &mut self.state {
             AppState::Scanning {
@@ -190,8 +280,25 @@ impl App {
                 root,
                 tree_state,
                 flat_rows,
+                nav,
+                bar_state,
+                treemap_state,
+                sunburst_state,
             } => {
-                render_browsing(frame, root, tree_state, flat_rows, theme, &root_path_str, total_scan_time);
+                render_browsing(
+                    frame,
+                    root,
+                    tree_state,
+                    flat_rows,
+                    nav,
+                    bar_state,
+                    treemap_state,
+                    sunburst_state,
+                    theme,
+                    &root_path_str,
+                    total_scan_time,
+                    view_mode,
+                );
             }
             AppState::Error(msg) => {
                 let para = Paragraph::new(format!("Error: {msg}"))
@@ -210,14 +317,151 @@ impl App {
     }
 }
 
+fn handle_tree_key(
+    key: KeyEvent,
+    root: &DiskNode,
+    tree_state: &mut TreeViewState,
+    flat_rows: &mut Vec<FlatRow>,
+) {
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            tree_state.move_down(flat_rows.len());
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            tree_state.move_up();
+        }
+        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
+            tree_state.drill_in(flat_rows);
+            *flat_rows = flatten_tree(root, &tree_state.expanded);
+        }
+        KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => {
+            tree_state.drill_out(flat_rows);
+            *flat_rows = flatten_tree(root, &tree_state.expanded);
+        }
+        KeyCode::Char(' ') => {
+            tree_state.toggle_expand(flat_rows);
+            *flat_rows = flatten_tree(root, &tree_state.expanded);
+        }
+        _ => {}
+    }
+}
+
+fn handle_nav_key(key: KeyEvent, nav: &mut ViewNavState, root: &DiskNode) {
+    let child_count = nav.child_count(root);
+    match key.code {
+        KeyCode::Char('j') | KeyCode::Down => nav.move_next(child_count),
+        KeyCode::Char('k') | KeyCode::Up => nav.move_prev(),
+        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => nav.drill_in(root),
+        KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => nav.drill_out(),
+        _ => {}
+    }
+}
+
+fn handle_treemap_key(
+    key: KeyEvent,
+    nav: &mut ViewNavState,
+    root: &DiskNode,
+    treemap_state: &mut TreemapState,
+) {
+    match key.code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            let new_sel = treemap_state.navigate(nav.selected_child, 0, 1);
+            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            let new_sel = treemap_state.navigate(nav.selected_child, 0, -1);
+            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            let new_sel = treemap_state.navigate(nav.selected_child, 1, 0);
+            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            let new_sel = treemap_state.navigate(nav.selected_child, -1, 0);
+            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+        }
+        KeyCode::Enter => {
+            nav.drill_in(root);
+            treemap_state.invalidate();
+        }
+        KeyCode::Backspace => {
+            nav.drill_out();
+            treemap_state.invalidate();
+        }
+        _ => {}
+    }
+}
+
+/// Map from treemap rect index back to child_index.
+fn remap_treemap_index(state: &TreemapState, rect_idx: usize) -> usize {
+    state
+        .cached_rects
+        .get(rect_idx)
+        .map(|r| r.child_index)
+        .unwrap_or(0)
+}
+
+fn handle_sunburst_key(
+    key: KeyEvent,
+    nav: &mut ViewNavState,
+    root: &DiskNode,
+    sunburst_state: &mut SunburstState,
+) {
+    match key.code {
+        KeyCode::Char('l') | KeyCode::Right => {
+            sunburst_state.move_angular_next();
+            if let Some(idx) = sunburst_state.selected_child_index() {
+                nav.selected_child = idx;
+            }
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            sunburst_state.move_angular_prev();
+            if let Some(idx) = sunburst_state.selected_child_index() {
+                nav.selected_child = idx;
+            }
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            sunburst_state.move_ring_out();
+            if let Some(idx) = sunburst_state.selected_child_index() {
+                nav.selected_child = idx;
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            sunburst_state.move_ring_in();
+            if let Some(idx) = sunburst_state.selected_child_index() {
+                nav.selected_child = idx;
+            }
+        }
+        KeyCode::Enter => {
+            nav.drill_in(root);
+            sunburst_state.invalidate();
+            sunburst_state.selected_ring = 0;
+            sunburst_state.selected_segment = 0;
+        }
+        KeyCode::Backspace => {
+            nav.drill_out();
+            sunburst_state.invalidate();
+            sunburst_state.selected_ring = 0;
+            sunburst_state.selected_segment = 0;
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_browsing(
     frame: &mut Frame,
     root: &DiskNode,
     tree_state: &mut TreeViewState,
     flat_rows: &[FlatRow],
+    nav: &ViewNavState,
+    bar_state: &mut BarState,
+    treemap_state: &mut TreemapState,
+    sunburst_state: &mut SunburstState,
     theme: &Theme,
     root_path_str: &str,
     total_scan_time: Option<Duration>,
+    view_mode: ViewMode,
 ) {
     let area = frame.area();
 
@@ -225,37 +469,104 @@ fn render_browsing(
     let [main_area, status_area] =
         Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
-    // Left panel (tree) + right panel (info)
-    let [tree_area, info_area] =
-        Layout::horizontal([Constraint::Percentage(60), Constraint::Fill(1)]).areas(main_area);
+    // For tree view: left (tree) + right (info), same as before
+    // For other views: left (viz) + right (info)
+    let [viz_area, info_area] =
+        Layout::horizontal([Constraint::Percentage(65), Constraint::Fill(1)]).areas(main_area);
 
-    // Tree panel
-    let tree_block = Block::bordered()
-        .title(format!(" {root_path_str} "))
+    // Viz panel with border
+    let viz_title = match view_mode {
+        ViewMode::Tree => format!(" {root_path_str} "),
+        ViewMode::Treemap => format!(" {root_path_str} — Treemap "),
+        ViewMode::Sunburst => format!(" {root_path_str} — Sunburst "),
+        ViewMode::Bar => format!(" {root_path_str} — Bar "),
+    };
+
+    let viz_block = Block::bordered()
+        .title(viz_title)
         .title_alignment(Alignment::Left)
         .border_style(theme.border_style);
 
-    let inner_tree = tree_block.inner(tree_area);
-    frame.render_widget(tree_block, tree_area);
+    let inner_viz = viz_block.inner(viz_area);
+    frame.render_widget(viz_block, viz_area);
 
-    let tree_view = TreeView {
-        rows: flat_rows,
-        root_size: root.size,
-        theme,
+    // Render the active view
+    let selected_node_path = match view_mode {
+        ViewMode::Tree => {
+            let tree_view = TreeView {
+                rows: flat_rows,
+                root_size: root.size,
+                theme,
+            };
+            frame.render_stateful_widget(tree_view, inner_viz, &mut tree_state.list_state);
+            flat_rows
+                .get(tree_state.cursor)
+                .map(|r| r.path_indices.clone())
+        }
+        ViewMode::Bar => {
+            if let Some(view_node) = nav.resolve_view_root(root) {
+                let bar_view = BarView {
+                    node: view_node,
+                    theme,
+                };
+                frame.render_stateful_widget(bar_view, inner_viz, bar_state);
+            }
+            Some(nav.selected_path())
+        }
+        ViewMode::Treemap => {
+            if let Some(view_node) = nav.resolve_view_root(root) {
+                let treemap_view = TreemapView {
+                    node: view_node,
+                    theme,
+                    selected: nav.selected_child,
+                };
+                frame.render_stateful_widget(treemap_view, inner_viz, treemap_state);
+            }
+            Some(nav.selected_path())
+        }
+        ViewMode::Sunburst => {
+            if let Some(view_node) = nav.resolve_view_root(root) {
+                let sunburst_view = SunburstView {
+                    node: view_node,
+                    theme,
+                };
+                frame.render_stateful_widget(sunburst_view, inner_viz, sunburst_state);
+            }
+            Some(nav.selected_path())
+        }
     };
-    frame.render_stateful_widget(tree_view, inner_tree, &mut tree_state.list_state);
 
     // Info panel
+    render_info_panel(frame, root, &selected_node_path, theme, info_area);
+
+    // Status bar with view indicator
+    render_status_bar(
+        frame,
+        root,
+        theme,
+        total_scan_time,
+        view_mode,
+        status_area,
+    );
+}
+
+fn render_info_panel(
+    frame: &mut Frame,
+    root: &DiskNode,
+    selected_path: &Option<Vec<usize>>,
+    theme: &Theme,
+    area: Rect,
+) {
     let info_block = Block::bordered()
         .title(" Info ")
         .title_alignment(Alignment::Left)
         .border_style(theme.border_style);
 
-    let inner_info = info_block.inner(info_area);
-    frame.render_widget(info_block, info_area);
+    let inner_info = info_block.inner(area);
+    frame.render_widget(info_block, area);
 
-    let info_content = if let Some(row) = flat_rows.get(tree_state.cursor) {
-        let node = resolve_node(root, &row.path_indices);
+    let info_content = if let Some(path) = selected_path {
+        let node = resolve_node(root, path);
         match node {
             Some(node) => build_info_lines(node, root.size, theme),
             None => vec![Line::from("  No data")],
@@ -265,24 +576,50 @@ fn render_browsing(
     };
 
     frame.render_widget(Paragraph::new(info_content), inner_info);
+}
 
-    // Status bar
+fn render_status_bar(
+    frame: &mut Frame,
+    root: &DiskNode,
+    theme: &Theme,
+    total_scan_time: Option<Duration>,
+    view_mode: ViewMode,
+    area: Rect,
+) {
     let scan_time = total_scan_time
         .map(|d| format!("{:.1}s", d.as_secs_f64()))
         .unwrap_or_else(|| "...".into());
 
-    let status = Line::from(vec![
+    // Build view indicator: [1:Tree] 2:Map 3:Sun 4:Bar
+    let mut view_spans: Vec<Span> = Vec::new();
+    view_spans.push(Span::raw("  "));
+    for (i, mode) in ViewMode::ALL.iter().enumerate() {
+        if i > 0 {
+            view_spans.push(Span::raw(" "));
+        }
+        let text = format!("{}:{}", mode.key(), mode.label());
+        if *mode == view_mode {
+            view_spans.push(Span::styled(
+                format!("[{text}]"),
+                theme.view_indicator_active,
+            ));
+        } else {
+            view_spans.push(Span::styled(text, theme.view_indicator_inactive));
+        }
+    }
+
+    let mut spans = vec![
         Span::styled("  Total: ", theme.status_style),
         Span::raw(format_size(root.size, BINARY)),
         Span::styled("  │  Files: ", theme.status_style),
         Span::raw(root.total_files().to_string()),
-        Span::styled("  │  Dirs: ", theme.status_style),
-        Span::raw(root.total_dirs().to_string()),
-        Span::styled("  │  Scanned in ", theme.status_style),
+        Span::styled("  │  ", theme.status_style),
         Span::raw(scan_time),
-    ]);
+        Span::styled("  │", theme.status_style),
+    ];
+    spans.extend(view_spans);
 
-    frame.render_widget(Paragraph::new(status), status_area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn build_info_lines<'a>(node: &'a DiskNode, root_size: u64, theme: &Theme) -> Vec<Line<'a>> {
@@ -326,7 +663,6 @@ fn build_info_lines<'a>(node: &'a DiskNode, root_size: u64, theme: &Theme) -> Ve
             Span::raw(node.total_dirs().to_string()),
         ]));
 
-        // Top 5 largest children
         if !node.children.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
