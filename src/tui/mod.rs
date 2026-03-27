@@ -19,7 +19,6 @@ use crate::scanner::walker::ScanUpdate;
 use crate::tui::theme::Theme;
 use crate::tui::views::bar::{BarState, BarView};
 use crate::tui::views::nav::ViewNavState;
-use crate::tui::views::sunburst::{SunburstState, SunburstView};
 use crate::tui::views::tree::{flatten_tree, resolve_node, FlatRow, TreeView, TreeViewState};
 use crate::tui::views::treemap::{TreemapState, TreemapView};
 use crate::tui::widgets::progress::ScanProgress;
@@ -28,7 +27,6 @@ use crate::tui::widgets::progress::ScanProgress;
 pub enum ViewMode {
     Tree,
     Treemap,
-    Sunburst,
     Bar,
 }
 
@@ -37,7 +35,6 @@ impl ViewMode {
         match self {
             ViewMode::Tree => "Tree",
             ViewMode::Treemap => "Map",
-            ViewMode::Sunburst => "Sun",
             ViewMode::Bar => "Bar",
         }
     }
@@ -46,17 +43,11 @@ impl ViewMode {
         match self {
             ViewMode::Tree => '1',
             ViewMode::Treemap => '2',
-            ViewMode::Sunburst => '3',
-            ViewMode::Bar => '4',
+            ViewMode::Bar => '3',
         }
     }
 
-    const ALL: [ViewMode; 4] = [
-        ViewMode::Tree,
-        ViewMode::Treemap,
-        ViewMode::Sunburst,
-        ViewMode::Bar,
-    ];
+    const ALL: [ViewMode; 3] = [ViewMode::Tree, ViewMode::Treemap, ViewMode::Bar];
 }
 
 enum AppState {
@@ -75,7 +66,6 @@ enum AppState {
         // Per-view state
         bar_state: BarState,
         treemap_state: TreemapState,
-        sunburst_state: SunburstState,
     },
     Error(String),
 }
@@ -157,7 +147,6 @@ impl App {
                         nav: ViewNavState::new(),
                         bar_state: BarState::new(),
                         treemap_state: TreemapState::new(),
-                        sunburst_state: SunburstState::new(),
                     };
                 }
                 Ok(ScanUpdate::Error(msg)) => {
@@ -194,10 +183,6 @@ impl App {
                     return false;
                 }
                 KeyCode::Char('3') => {
-                    self.switch_to_nav_view(ViewMode::Sunburst);
-                    return false;
-                }
-                KeyCode::Char('4') => {
                     self.switch_to_nav_view(ViewMode::Bar);
                     return false;
                 }
@@ -212,7 +197,6 @@ impl App {
             nav,
             bar_state,
             treemap_state,
-            sunburst_state,
         } = &mut self.state
         {
             match self.view_mode {
@@ -226,9 +210,6 @@ impl App {
                 ViewMode::Treemap => {
                     handle_treemap_key(key, nav, root, treemap_state);
                 }
-                ViewMode::Sunburst => {
-                    handle_sunburst_key(key, nav, root, sunburst_state);
-                }
             }
         }
 
@@ -237,17 +218,11 @@ impl App {
 
     fn switch_to_nav_view(&mut self, mode: ViewMode) {
         if let AppState::Browsing {
-            treemap_state,
-            sunburst_state,
-            ..
+            treemap_state, ..
         } = &mut self.state
         {
-            // Invalidate cached layouts when switching views
             if mode == ViewMode::Treemap {
                 treemap_state.invalidate();
-            }
-            if mode == ViewMode::Sunburst {
-                sunburst_state.invalidate();
             }
         }
         self.view_mode = mode;
@@ -283,7 +258,6 @@ impl App {
                 nav,
                 bar_state,
                 treemap_state,
-                sunburst_state,
             } => {
                 render_browsing(
                     frame,
@@ -293,7 +267,6 @@ impl App {
                     nav,
                     bar_state,
                     treemap_state,
-                    sunburst_state,
                     theme,
                     &root_path_str,
                     total_scan_time,
@@ -401,53 +374,6 @@ fn remap_treemap_index(state: &TreemapState, rect_idx: usize) -> usize {
         .unwrap_or(0)
 }
 
-fn handle_sunburst_key(
-    key: KeyEvent,
-    nav: &mut ViewNavState,
-    root: &DiskNode,
-    sunburst_state: &mut SunburstState,
-) {
-    match key.code {
-        KeyCode::Char('l') | KeyCode::Right => {
-            sunburst_state.move_angular_next();
-            if let Some(idx) = sunburst_state.selected_child_index() {
-                nav.selected_child = idx;
-            }
-        }
-        KeyCode::Char('h') | KeyCode::Left => {
-            sunburst_state.move_angular_prev();
-            if let Some(idx) = sunburst_state.selected_child_index() {
-                nav.selected_child = idx;
-            }
-        }
-        KeyCode::Char('j') | KeyCode::Down => {
-            sunburst_state.move_ring_out();
-            if let Some(idx) = sunburst_state.selected_child_index() {
-                nav.selected_child = idx;
-            }
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            sunburst_state.move_ring_in();
-            if let Some(idx) = sunburst_state.selected_child_index() {
-                nav.selected_child = idx;
-            }
-        }
-        KeyCode::Enter => {
-            nav.drill_in(root);
-            sunburst_state.invalidate();
-            sunburst_state.selected_ring = 0;
-            sunburst_state.selected_segment = 0;
-        }
-        KeyCode::Backspace => {
-            nav.drill_out();
-            sunburst_state.invalidate();
-            sunburst_state.selected_ring = 0;
-            sunburst_state.selected_segment = 0;
-        }
-        _ => {}
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn render_browsing(
     frame: &mut Frame,
@@ -457,7 +383,6 @@ fn render_browsing(
     nav: &ViewNavState,
     bar_state: &mut BarState,
     treemap_state: &mut TreemapState,
-    sunburst_state: &mut SunburstState,
     theme: &Theme,
     root_path_str: &str,
     total_scan_time: Option<Duration>,
@@ -478,7 +403,6 @@ fn render_browsing(
     let viz_title = match view_mode {
         ViewMode::Tree => format!(" {root_path_str} "),
         ViewMode::Treemap => format!(" {root_path_str} — Treemap "),
-        ViewMode::Sunburst => format!(" {root_path_str} — Sunburst "),
         ViewMode::Bar => format!(" {root_path_str} — Bar "),
     };
 
@@ -521,16 +445,6 @@ fn render_browsing(
                     selected: nav.selected_child,
                 };
                 frame.render_stateful_widget(treemap_view, inner_viz, treemap_state);
-            }
-            Some(nav.selected_path())
-        }
-        ViewMode::Sunburst => {
-            if let Some(view_node) = nav.resolve_view_root(root) {
-                let sunburst_view = SunburstView {
-                    node: view_node,
-                    theme,
-                };
-                frame.render_stateful_widget(sunburst_view, inner_viz, sunburst_state);
             }
             Some(nav.selected_path())
         }

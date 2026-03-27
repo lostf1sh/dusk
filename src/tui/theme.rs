@@ -15,8 +15,6 @@ pub struct Theme {
     pub spinner_style: Style,
     /// Rotating palette for treemap/sunburst segment distinction.
     pub segment_colors: [Color; 8],
-    /// Richer sunburst palette with more visual pop (RGB).
-    pub sunburst_colors: [Color; 12],
     pub bar_empty: Style,
     pub view_indicator_active: Style,
     pub view_indicator_inactive: Style,
@@ -48,20 +46,6 @@ impl Default for Theme {
                 Color::LightBlue,
                 Color::LightGreen,
             ],
-            sunburst_colors: [
-                Color::Rgb(86, 180, 233),   // sky blue
-                Color::Rgb(230, 159, 0),    // orange
-                Color::Rgb(0, 158, 115),    // teal
-                Color::Rgb(240, 228, 66),   // yellow
-                Color::Rgb(204, 121, 167),  // pink
-                Color::Rgb(0, 114, 178),    // blue
-                Color::Rgb(213, 94, 0),     // vermillion
-                Color::Rgb(114, 183, 106),  // green
-                Color::Rgb(183, 138, 214),  // lavender
-                Color::Rgb(255, 167, 123),  // salmon
-                Color::Rgb(128, 222, 217),  // aqua
-                Color::Rgb(255, 211, 92),   // gold
-            ],
             bar_empty: Style::default().fg(Color::DarkGray),
             view_indicator_active: Style::default()
                 .fg(Color::White)
@@ -86,18 +70,6 @@ impl Theme {
         self.segment_colors[index % self.segment_colors.len()]
     }
 
-    /// Pick a sunburst color — richer palette, dimmed for deeper rings.
-    pub fn sunburst_color(&self, index: usize, ring: usize) -> Color {
-        let base = self.sunburst_colors[index % self.sunburst_colors.len()];
-        // Dim colors for deeper rings to create depth perception
-        match ring {
-            0 => base,
-            1 => dim_color(base, 0.80),
-            2 => dim_color(base, 0.60),
-            _ => dim_color(base, 0.45),
-        }
-    }
-
     /// Pick a size style based on proportion of parent.
     pub fn size_style(&self, size: u64, parent_size: u64) -> Style {
         if parent_size == 0 {
@@ -111,18 +83,5 @@ impl Theme {
         } else {
             self.size_small
         }
-    }
-}
-
-/// Dim an RGB color by a factor (0.0 = black, 1.0 = original).
-/// Non-RGB colors pass through unchanged.
-fn dim_color(color: Color, factor: f64) -> Color {
-    match color {
-        Color::Rgb(r, g, b) => Color::Rgb(
-            (r as f64 * factor) as u8,
-            (g as f64 * factor) as u8,
-            (b as f64 * factor) as u8,
-        ),
-        other => other,
     }
 }
