@@ -8,8 +8,12 @@ use std::time::SystemTime;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
+use rayon::prelude::*;
+
 use crate::model::node::{DiskNode, NodeType};
 use crate::scanner::ignore_rules::build_walk;
+
+const SCAN_BATCH_SIZE: usize = 1024;
 
 /// Messages sent from the scanner thread to the TUI.
 pub enum ScanUpdate {
@@ -23,6 +27,15 @@ struct RawEntry {
     size: u64,
     node_type: NodeType,
     modified: Option<SystemTime>,
+}
+
+struct ProcessedEntry {
+    path: PathBuf,
+    size: u64,
+    node_type: NodeType,
+    modified: Option<SystemTime>,
+    #[cfg(unix)]
+    inode_key: Option<(u64, u64)>,
 }
 
 /// Run a full directory scan. Meant to be called on a spawned thread.
@@ -44,6 +57,7 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
     let mut entries: Vec<RawEntry> = Vec::new();
     let mut files_found: u64 = 0;
     let mut bytes_found: u64 = 0;
+    let mut batch_paths = Vec::with_capacity(SCAN_BATCH_SIZE);
     #[cfg(unix)]
     let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
 
@@ -60,61 +74,33 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
             continue;
         }
 
-        let metadata = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue, // can't stat — skip
-        };
+        batch_paths.push(path);
 
-        let node_type = if metadata.is_symlink() {
-            NodeType::Symlink
-        } else if metadata.is_dir() {
-            NodeType::Dir
-        } else {
-            NodeType::File
-        };
-
-        let size = if node_type == NodeType::Dir {
-            0 // directories get their size from children
-        } else {
-            #[cfg(unix)]
-            {
-                // Count each inode once for disk usage (hard links share one inode).
-                if matches!(node_type, NodeType::File | NodeType::Symlink) {
-                    let key = (metadata.dev(), metadata.ino());
-                    if !seen_inodes.insert(key) {
-                        0
-                    } else {
-                        metadata.len()
-                    }
-                } else {
-                    metadata.len()
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                metadata.len()
-            }
-        };
-
-        files_found += 1;
-        bytes_found += size;
-
-        let modified = metadata.modified().ok();
-
-        entries.push(RawEntry {
-            path,
-            size,
-            node_type,
-            modified,
-        });
-
-        // Send progress every 500 entries
-        if files_found.is_multiple_of(500) {
-            let _ = tx.send(ScanUpdate::Progress {
-                files_found,
-                bytes_found,
-            });
+        if batch_paths.len() >= SCAN_BATCH_SIZE {
+            let processed = process_batch(std::mem::take(&mut batch_paths));
+            absorb_processed_entries(
+                processed,
+                &mut entries,
+                &mut files_found,
+                &mut bytes_found,
+                tx,
+                #[cfg(unix)]
+                &mut seen_inodes,
+            );
         }
+    }
+
+    if !batch_paths.is_empty() {
+        let processed = process_batch(batch_paths);
+        absorb_processed_entries(
+            processed,
+            &mut entries,
+            &mut files_found,
+            &mut bytes_found,
+            tx,
+            #[cfg(unix)]
+            &mut seen_inodes,
+        );
     }
 
     // Send final progress before building tree
@@ -127,6 +113,93 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
     let mut tree = build_tree(root, &entries);
     tree.sort_children_by_size();
     Ok(tree)
+}
+
+fn process_batch(paths: Vec<PathBuf>) -> Vec<ProcessedEntry> {
+    paths.into_par_iter().filter_map(process_path).collect()
+}
+
+fn process_path(path: PathBuf) -> Option<ProcessedEntry> {
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+
+    let node_type = if metadata.file_type().is_symlink() {
+        NodeType::Symlink
+    } else if metadata.is_dir() {
+        NodeType::Dir
+    } else {
+        NodeType::File
+    };
+
+    Some(ProcessedEntry {
+        path,
+        size: if node_type == NodeType::Dir {
+            0
+        } else {
+            metadata.len()
+        },
+        node_type: node_type.clone(),
+        modified: metadata.modified().ok(),
+        #[cfg(unix)]
+        inode_key: if matches!(node_type, NodeType::File | NodeType::Symlink) {
+            Some((metadata.dev(), metadata.ino()))
+        } else {
+            None
+        },
+    })
+}
+
+fn absorb_processed_entries(
+    processed: Vec<ProcessedEntry>,
+    entries: &mut Vec<RawEntry>,
+    files_found: &mut u64,
+    bytes_found: &mut u64,
+    tx: &Sender<ScanUpdate>,
+    #[cfg(unix)] seen_inodes: &mut HashSet<(u64, u64)>,
+) {
+    for entry in processed {
+        *files_found += 1;
+
+        let size = effective_entry_size(
+            &entry,
+            #[cfg(unix)]
+            seen_inodes,
+        );
+        *bytes_found += size;
+
+        entries.push(RawEntry {
+            path: entry.path,
+            size,
+            node_type: entry.node_type,
+            modified: entry.modified,
+        });
+
+        if files_found.is_multiple_of(500) {
+            let _ = tx.send(ScanUpdate::Progress {
+                files_found: *files_found,
+                bytes_found: *bytes_found,
+            });
+        }
+    }
+}
+
+fn effective_entry_size(
+    entry: &ProcessedEntry,
+    #[cfg(unix)] seen_inodes: &mut HashSet<(u64, u64)>,
+) -> u64 {
+    if entry.node_type == NodeType::Dir {
+        return 0;
+    }
+
+    #[cfg(unix)]
+    {
+        if let Some(key) = entry.inode_key {
+            if !seen_inodes.insert(key) {
+                return 0;
+            }
+        }
+    }
+
+    entry.size
 }
 
 /// Build a DiskNode tree from a flat list of entries by grouping children under their parent paths.
