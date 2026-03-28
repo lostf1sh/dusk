@@ -119,7 +119,11 @@ impl ViewNavState {
 
     /// Path indices from scan root to the selected node (for FS ops, info, delete).
     pub fn path_indices(&self, root: &DiskNode) -> Option<Vec<usize>> {
-        path_indices_for_named_selection(root, &self.view_dir_name_path, self.selected_name.as_str())
+        path_indices_for_named_selection(
+            root,
+            &self.view_dir_name_path,
+            self.selected_name.as_str(),
+        )
     }
 
     /// Resolve the view root node from the scan root.
@@ -131,7 +135,6 @@ impl ViewNavState {
         }
         Some(node)
     }
-
 }
 
 #[cfg(test)]

@@ -293,7 +293,10 @@ mod tests {
         }
 
         let tree = tree.expect("should receive Complete");
-        assert_eq!(tree.size, 5, "hard-linked file should not double-count bytes");
+        assert_eq!(
+            tree.size, 5,
+            "hard-linked file should not double-count bytes"
+        );
         assert_eq!(tree.total_files(), 2);
     }
 }
