@@ -201,11 +201,12 @@ pub fn handle_overlay_key(overlay: &mut Overlay, key: KeyEvent) -> OverlayAction
                 input.insert(ch);
                 OverlayAction::Consumed
             }
-            KeyCode::Char(_) if !results.is_empty() => {
-                // Any char while results shown — clear results, go back to input
+            KeyCode::Char(ch) if !results.is_empty() => {
+                // Any char while results shown — clear results and continue typing
                 results.clear();
                 *selected = 0;
                 list_state.select(None);
+                input.insert(ch);
                 OverlayAction::Consumed
             }
             _ => OverlayAction::Consumed,
@@ -526,4 +527,51 @@ fn centered_rect(width_pct: u16, height: u16, area: Rect) -> Rect {
         .flex(Flex::Center)
         .areas(vertical);
     horizontal
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyEvent, KeyModifiers};
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn test_search_typing_after_results_keeps_typed_char() {
+        let mut overlay = Overlay::Search {
+            input: TextInputState {
+                query: "ab".into(),
+                cursor: 2,
+            },
+            all_entries: Vec::new(),
+            results: vec![SearchResult {
+                name: "abc".into(),
+                path_indices: vec![0],
+                name_path: vec!["abc".into()],
+                score: 1,
+            }],
+            selected: 0,
+            list_state: ListState::default(),
+        };
+
+        let action = handle_overlay_key(&mut overlay, press(KeyCode::Char('x')));
+        assert!(matches!(action, OverlayAction::Consumed));
+
+        match overlay {
+            Overlay::Search {
+                input,
+                results,
+                selected,
+                ..
+            } => {
+                assert_eq!(input.query, "abx");
+                assert_eq!(input.cursor, 3);
+                assert!(results.is_empty());
+                assert_eq!(selected, 0);
+            }
+            _ => panic!("expected search overlay"),
+        }
+    }
 }

@@ -1,7 +1,12 @@
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::SystemTime;
+
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 use crate::model::node::{DiskNode, NodeType};
 use crate::scanner::ignore_rules::build_walk;
@@ -39,6 +44,8 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
     let mut entries: Vec<RawEntry> = Vec::new();
     let mut files_found: u64 = 0;
     let mut bytes_found: u64 = 0;
+    #[cfg(unix)]
+    let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
 
     for result in walker {
         let entry = match result {
@@ -69,7 +76,24 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
         let size = if node_type == NodeType::Dir {
             0 // directories get their size from children
         } else {
-            metadata.len()
+            #[cfg(unix)]
+            {
+                // Count each inode once for disk usage (hard links share one inode).
+                if matches!(node_type, NodeType::File | NodeType::Symlink) {
+                    let key = (metadata.dev(), metadata.ino());
+                    if !seen_inodes.insert(key) {
+                        0
+                    } else {
+                        metadata.len()
+                    }
+                } else {
+                    metadata.len()
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                metadata.len()
+            }
         };
 
         files_found += 1;
@@ -245,5 +269,31 @@ mod tests {
         let names: Vec<&str> = tree.children.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"kept.txt"));
         assert!(!names.contains(&"ignored.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_hard_links_count_once() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let a = root.join("a.txt");
+        fs::write(&a, "hello").unwrap();
+        fs::hard_link(&a, root.join("b.txt")).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        scan(root.to_path_buf(), tx);
+
+        let mut tree = None;
+        for msg in rx {
+            if let ScanUpdate::Complete(t) = msg {
+                tree = Some(t);
+                break;
+            }
+        }
+
+        let tree = tree.expect("should receive Complete");
+        assert_eq!(tree.size, 5, "hard-linked file should not double-count bytes");
+        assert_eq!(tree.total_files(), 2);
     }
 }

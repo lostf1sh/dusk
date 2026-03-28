@@ -4,7 +4,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::StatefulWidget;
 
 use crate::model::node::{DiskNode, NodeType};
+use crate::tui::filter::FilterCriteria;
 use crate::tui::theme::Theme;
+use crate::tui::views::tree::filter_visible_child_indices;
 
 /// A rectangle in the treemap layout.
 #[derive(Debug, Clone)]
@@ -23,6 +25,7 @@ pub struct TreemapRect {
 pub struct TreemapState {
     pub cached_rects: Vec<TreemapRect>,
     pub cached_area: Rect,
+    cached_visible: Vec<usize>,
 }
 
 impl TreemapState {
@@ -30,30 +33,42 @@ impl TreemapState {
         Self {
             cached_rects: Vec::new(),
             cached_area: Rect::default(),
+            cached_visible: Vec::new(),
         }
     }
 
-    /// Recompute layout if area changed or rects are empty.
-    pub fn update_layout(&mut self, node: &DiskNode, area: Rect) {
-        if self.cached_area == area && !self.cached_rects.is_empty() {
+    /// Recompute layout if area, visible children, or cache state changed.
+    pub fn update_layout(&mut self, node: &DiskNode, area: Rect, visible_indices: &[usize]) {
+        if self.cached_area == area
+            && self.cached_visible == visible_indices
+            && !self.cached_rects.is_empty()
+        {
             return;
         }
-        self.cached_rects = squarify_layout(node, area);
+        self.cached_rects = squarify_layout_filtered(node, area, visible_indices);
         self.cached_area = area;
+        self.cached_visible = visible_indices.to_vec();
     }
 
     pub fn invalidate(&mut self) {
         self.cached_rects.clear();
+        self.cached_visible.clear();
     }
 
-    /// Find the rect index at direction relative to currently selected.
-    pub fn navigate(&self, selected: usize, dx: i16, dy: i16) -> usize {
+    /// Spatial navigation from the rect for `selected_child_index` (index into `node.children`).
+    /// Returns a child index in `node.children`, not a rect list index.
+    pub fn navigate(&self, selected_child_index: usize, dx: i16, dy: i16) -> usize {
         if self.cached_rects.is_empty() {
-            return 0;
+            return selected_child_index;
         }
-        let sel = match self.cached_rects.get(selected) {
+        let start_rect_idx = self
+            .cached_rects
+            .iter()
+            .position(|r| r.child_index == selected_child_index)
+            .unwrap_or(0);
+        let sel = match self.cached_rects.get(start_rect_idx) {
             Some(r) => r,
-            None => return 0,
+            None => return selected_child_index,
         };
         let cx = sel.x as i16 + sel.width as i16 / 2;
         let cy = sel.y as i16 + sel.height as i16 / 2;
@@ -61,11 +76,11 @@ impl TreemapState {
         let target_x = cx + dx * 10;
         let target_y = cy + dy * 5;
 
-        let mut best = selected;
+        let mut best = start_rect_idx;
         let mut best_dist = i32::MAX;
 
         for (i, r) in self.cached_rects.iter().enumerate() {
-            if i == selected {
+            if i == start_rect_idx {
                 continue;
             }
             let rx = r.x as i16 + r.width as i16 / 2;
@@ -89,14 +104,20 @@ impl TreemapState {
                 best = i;
             }
         }
-        best
+        self.cached_rects
+            .get(best)
+            .map(|r| r.child_index)
+            .unwrap_or(selected_child_index)
     }
 }
 
 pub struct TreemapView<'a> {
     pub node: &'a DiskNode,
     pub theme: &'a Theme,
-    pub selected: usize,
+    /// Child index in `node.children` (not filtered list index).
+    pub selected_child_index: usize,
+    /// Same subset as bar/tree filter (indices into `node.children`).
+    pub visible_indices: &'a [usize],
 }
 
 impl StatefulWidget for TreemapView<'_> {
@@ -113,14 +134,14 @@ impl StatefulWidget for TreemapView<'_> {
             return;
         }
 
-        state.update_layout(self.node, area);
+        state.update_layout(self.node, area, self.visible_indices);
 
         for rect in &state.cached_rects {
             if rect.width == 0 || rect.height == 0 {
                 continue;
             }
 
-            let is_selected = rect.child_index == self.selected;
+            let is_selected = rect.child_index == self.selected_child_index;
             let color = self.theme.segment_color(rect.child_index);
 
             let base_style = if is_selected {
@@ -174,6 +195,17 @@ impl StatefulWidget for TreemapView<'_> {
     }
 }
 
+/// Child indices that are both filter-visible and drawable in the treemap.
+pub fn visible_treemap_child_indices(
+    node: &DiskNode,
+    filter: Option<&FilterCriteria>,
+) -> Vec<usize> {
+    filter_visible_child_indices(node, filter)
+        .into_iter()
+        .filter(|&i| node.children.get(i).is_some_and(|child| child.size > 0))
+        .collect()
+}
+
 fn truncate_name(name: &str, max_len: usize) -> String {
     if name.len() <= max_len {
         name.to_string()
@@ -184,26 +216,28 @@ fn truncate_name(name: &str, max_len: usize) -> String {
     }
 }
 
-/// Squarified treemap layout algorithm.
-/// Produces a Vec<TreemapRect> for the children of `node` within `area`.
-pub fn squarify_layout(node: &DiskNode, area: Rect) -> Vec<TreemapRect> {
+/// Layout only the given child indices (e.g. after applying the same filter as the tree view).
+pub fn squarify_layout_filtered(
+    node: &DiskNode,
+    area: Rect,
+    visible_indices: &[usize],
+) -> Vec<TreemapRect> {
     if node.children.is_empty() || area.width == 0 || area.height == 0 {
         return Vec::new();
     }
 
-    let total_size: u64 = node.children.iter().map(|c| c.size).sum();
+    let items: Vec<(usize, u64)> = visible_indices
+        .iter()
+        .filter_map(|&i| {
+            let c = node.children.get(i)?;
+            (c.size > 0).then_some((i, c.size))
+        })
+        .collect();
+
+    let total_size: u64 = items.iter().map(|(_, s)| *s).sum();
     if total_size == 0 {
         return Vec::new();
     }
-
-    // Children are already sorted by size (largest first from scanner)
-    let items: Vec<(usize, u64)> = node
-        .children
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.size > 0)
-        .map(|(i, c)| (i, c.size))
-        .collect();
 
     let mut rects = Vec::with_capacity(items.len());
     squarify_recurse(
@@ -414,7 +448,8 @@ mod tests {
     fn test_squarify_produces_rects() {
         let node = sample_node();
         let area = Rect::new(0, 0, 40, 20);
-        let rects = squarify_layout(&node, area);
+        let indices: Vec<usize> = (0..node.children.len()).collect();
+        let rects = squarify_layout_filtered(&node, area, &indices);
 
         assert_eq!(rects.len(), 3);
         // Largest child should get the most area
@@ -428,7 +463,7 @@ mod tests {
     #[test]
     fn test_squarify_empty() {
         let node = DiskNode::new("empty".into(), 0, NodeType::Dir, 0);
-        let rects = squarify_layout(&node, Rect::new(0, 0, 40, 20));
+        let rects = squarify_layout_filtered(&node, Rect::new(0, 0, 40, 20), &[]);
         assert!(rects.is_empty());
     }
 
@@ -437,11 +472,22 @@ mod tests {
         let node = sample_node();
         let area = Rect::new(0, 0, 40, 20);
         let mut state = TreemapState::new();
-        state.update_layout(&node, area);
+        let visible: Vec<usize> = (0..node.children.len()).collect();
+        state.update_layout(&node, area, &visible);
 
-        // Should be able to navigate between rects
-        let next = state.navigate(0, 1, 0); // move right
-                                            // Just verify it returns a valid index
-        assert!(next < state.cached_rects.len());
+        // Should be able to navigate between rects (navigate returns child index)
+        let next = state.navigate(0, 1, 0); // move right from first child
+        assert!(next < node.children.len());
+    }
+
+    #[test]
+    fn test_visible_treemap_child_indices_skip_zero_sized() {
+        let mut node = DiskNode::new("root".into(), 10, NodeType::Dir, 0);
+        node.children
+            .push(DiskNode::new("zero".into(), 0, NodeType::File, 1));
+        node.children
+            .push(DiskNode::new("ten".into(), 10, NodeType::File, 1));
+
+        assert_eq!(visible_treemap_child_indices(&node, None), vec![1]);
     }
 }

@@ -28,10 +28,10 @@ use crate::tui::theme::Theme;
 use crate::tui::views::bar::{BarState, BarView};
 use crate::tui::views::nav::ViewNavState;
 use crate::tui::views::tree::{
-    flatten_tree, flatten_tree_filtered, resolve_fs_path, resolve_node, FlatRow, TreeView,
-    TreeViewState,
+    filter_visible_child_indices, flatten_tree, flatten_tree_filtered, resolve_fs_path,
+    resolve_fs_path_by_name_path, resolve_node, FlatRow, TreeView, TreeViewState,
 };
-use crate::tui::views::treemap::{TreemapState, TreemapView};
+use crate::tui::views::treemap::{visible_treemap_child_indices, TreemapState, TreemapView};
 use crate::tui::widgets::progress::ScanProgress;
 use crate::tui::widgets::text_input::TextInputState;
 
@@ -307,7 +307,7 @@ impl App {
                     *flat_rows =
                         flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
                     treemap_state.invalidate();
-                    bar_state.sync_selection(nav.selected_child);
+                    sync_bar_list_selection(nav, root, bar_state, active_filter.as_ref());
                     return false;
                 }
                 KeyCode::Char('s') => {
@@ -316,12 +316,12 @@ impl App {
                     *flat_rows =
                         flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
                     treemap_state.invalidate();
-                    bar_state.sync_selection(nav.selected_child);
+                    sync_bar_list_selection(nav, root, bar_state, active_filter.as_ref());
                     return false;
                 }
                 KeyCode::Char('i') => {
                     let path_indices =
-                        selected_path_from_state(self.view_mode, flat_rows, tree_state, nav);
+                        selected_path_from_state(self.view_mode, flat_rows, tree_state, nav, root);
                     if let Some(path_indices) = path_indices {
                         if let Some(fs_path) = resolve_fs_path(&self.root_path, root, &path_indices)
                         {
@@ -346,7 +346,7 @@ impl App {
                 }
                 KeyCode::Char('d') => {
                     let path_indices =
-                        selected_path_from_state(self.view_mode, flat_rows, tree_state, nav);
+                        selected_path_from_state(self.view_mode, flat_rows, tree_state, nav, root);
                     if let Some(path_indices) = path_indices {
                         if let Some(fs_path) = resolve_fs_path(&self.root_path, root, &path_indices)
                         {
@@ -417,13 +417,11 @@ impl App {
                                 None
                             }
                         }
-                        ViewMode::Bar | ViewMode::Treemap => {
-                            if nav.view_root_path.is_empty() {
-                                Some(self.root_path.clone())
-                            } else {
-                                resolve_fs_path(&self.root_path, root, &nav.view_root_path)
-                            }
-                        }
+                        ViewMode::Bar | ViewMode::Treemap => resolve_fs_path_by_name_path(
+                            &self.root_path,
+                            root,
+                            &nav.view_dir_name_path,
+                        ),
                     };
                     if let Some(path) = dir_path {
                         let label = path
@@ -452,11 +450,11 @@ impl App {
                     handle_tree_key(key, root, tree_state, flat_rows, active_filter.as_ref());
                 }
                 ViewMode::Bar => {
-                    handle_nav_key(key, nav, root);
-                    bar_state.sync_selection(nav.selected_child);
+                    handle_nav_key(key, nav, root, active_filter.as_ref());
+                    sync_bar_list_selection(nav, root, bar_state, active_filter.as_ref());
                 }
                 ViewMode::Treemap => {
-                    handle_treemap_key(key, nav, root, treemap_state);
+                    handle_treemap_key(key, nav, root, treemap_state, active_filter.as_ref());
                 }
             }
         }
@@ -549,15 +547,16 @@ impl App {
                 tree_state.list_state.select(Some(pos));
             }
 
-            // Update nav views
-            if path_indices.len() > 1 {
-                nav.view_root_path = path_indices[..path_indices.len() - 1].to_vec();
-                nav.selected_child = *path_indices.last().unwrap_or(&0);
-            } else if !path_indices.is_empty() {
-                nav.view_root_path.clear();
-                nav.selected_child = path_indices[0];
+            // Update nav views (name-stable)
+            if name_path.len() > 1 {
+                nav.view_dir_name_path = name_path[..name_path.len() - 1].to_vec();
+                nav.selected_name = name_path.last().cloned().unwrap_or_default();
+            } else if !name_path.is_empty() {
+                nav.view_dir_name_path.clear();
+                nav.selected_name = name_path[0].clone();
             }
-            bar_state.sync_selection(nav.selected_child);
+            nav.ensure_valid_selection(root, active_filter.as_ref());
+            sync_bar_list_selection(nav, root, bar_state, active_filter.as_ref());
             treemap_state.invalidate();
         }
     }
@@ -567,13 +566,17 @@ impl App {
             root,
             tree_state,
             flat_rows,
+            nav,
             active_filter,
+            treemap_state,
             ..
         } = &mut self.state
         {
             *active_filter = criteria;
             *flat_rows = flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
             tree_state.clamp_cursor(flat_rows.len());
+            nav.ensure_valid_selection(root, active_filter.as_ref());
+            treemap_state.invalidate();
         }
     }
 
@@ -636,15 +639,16 @@ impl App {
                         tree_state.list_state.select(Some(pos));
                     }
 
-                    // For nav views: set view root to parent
-                    if path_indices.len() > 1 {
-                        nav.view_root_path = path_indices[..path_indices.len() - 1].to_vec();
-                        nav.selected_child = *path_indices.last().unwrap_or(&0);
+                    // For nav views: parent directory + selected bookmark name
+                    if components.len() > 1 {
+                        nav.view_dir_name_path = components[..components.len() - 1].to_vec();
+                        nav.selected_name = components[components.len() - 1].clone();
                     } else {
-                        nav.view_root_path.clear();
-                        nav.selected_child = path_indices[0];
+                        nav.view_dir_name_path.clear();
+                        nav.selected_name = components[0].clone();
                     }
-                    bar_state.sync_selection(nav.selected_child);
+                    nav.ensure_valid_selection(root, active_filter.as_ref());
+                    sync_bar_list_selection(nav, root, bar_state, active_filter.as_ref());
                     treemap_state.invalidate();
                 }
             }
@@ -684,12 +688,8 @@ impl App {
                         flatten_tree_filtered(root, &tree_state.expanded, active_filter.as_ref());
                     tree_state.clamp_cursor(flat_rows.len());
 
-                    // Clamp nav selection
-                    let child_count = nav.child_count(root);
-                    if child_count > 0 && nav.selected_child >= child_count {
-                        nav.selected_child = child_count - 1;
-                    }
-                    bar_state.sync_selection(nav.selected_child);
+                    nav.ensure_valid_selection(root, active_filter.as_ref());
+                    sync_bar_list_selection(nav, root, bar_state, active_filter.as_ref());
                     treemap_state.invalidate();
                 }
             }
@@ -804,12 +804,52 @@ fn selected_path_from_state(
     flat_rows: &[FlatRow],
     tree_state: &TreeViewState,
     nav: &ViewNavState,
+    root: &DiskNode,
 ) -> Option<Vec<usize>> {
     match view_mode {
         ViewMode::Tree => flat_rows
             .get(tree_state.cursor)
             .map(|r| r.path_indices.clone()),
-        ViewMode::Bar | ViewMode::Treemap => Some(nav.selected_path()),
+        ViewMode::Bar | ViewMode::Treemap => nav.path_indices(root),
+    }
+}
+
+fn sync_bar_list_selection(
+    nav: &ViewNavState,
+    root: &DiskNode,
+    bar_state: &mut BarState,
+    filter: Option<&FilterCriteria>,
+) {
+    let Some(view_node) = nav.resolve_view_root(root) else {
+        bar_state.list_state.select(None);
+        return;
+    };
+    let visible = filter_visible_child_indices(view_node, filter);
+    let pos = visible
+        .iter()
+        .position(|&i| view_node.children[i].name == nav.selected_name)
+        .unwrap_or(0);
+    bar_state.sync_selection(pos);
+}
+
+fn sync_treemap_selection(
+    nav: &mut ViewNavState,
+    root: &DiskNode,
+    filter: Option<&FilterCriteria>,
+) {
+    let Some(view_node) = nav.resolve_view_root(root) else {
+        nav.selected_name.clear();
+        return;
+    };
+
+    let visible = visible_treemap_child_indices(view_node, filter);
+    if visible.is_empty() {
+        nav.selected_name.clear();
+    } else if !visible
+        .iter()
+        .any(|&i| view_node.children[i].name == nav.selected_name)
+    {
+        nav.selected_name = view_node.children[visible[0]].name.clone();
     }
 }
 
@@ -843,13 +883,17 @@ fn handle_tree_key(
     }
 }
 
-fn handle_nav_key(key: KeyEvent, nav: &mut ViewNavState, root: &DiskNode) {
-    let child_count = nav.child_count(root);
+fn handle_nav_key(
+    key: KeyEvent,
+    nav: &mut ViewNavState,
+    root: &DiskNode,
+    filter: Option<&FilterCriteria>,
+) {
     match key.code {
-        KeyCode::Char('j') | KeyCode::Down => nav.move_next(child_count),
-        KeyCode::Char('k') | KeyCode::Up => nav.move_prev(),
-        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => nav.drill_in(root),
-        KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => nav.drill_out(),
+        KeyCode::Char('j') | KeyCode::Down => nav.move_next(root, filter),
+        KeyCode::Char('k') | KeyCode::Up => nav.move_prev(root, filter),
+        KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => nav.drill_in(root, filter),
+        KeyCode::Backspace | KeyCode::Char('h') | KeyCode::Left => nav.drill_out(root, filter),
         _ => {}
     }
 }
@@ -859,43 +903,53 @@ fn handle_treemap_key(
     nav: &mut ViewNavState,
     root: &DiskNode,
     treemap_state: &mut TreemapState,
+    filter: Option<&FilterCriteria>,
 ) {
+    sync_treemap_selection(nav, root, filter);
+    let Some(view_node) = nav.resolve_view_root(root) else {
+        return;
+    };
+    let sel_idx = view_node
+        .children
+        .iter()
+        .position(|c| c.name == nav.selected_name)
+        .unwrap_or(0);
+
     match key.code {
         KeyCode::Down | KeyCode::Char('j') => {
-            let new_sel = treemap_state.navigate(nav.selected_child, 0, 1);
-            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+            let new_idx = treemap_state.navigate(sel_idx, 0, 1);
+            if let Some(c) = view_node.children.get(new_idx) {
+                nav.selected_name = c.name.clone();
+            }
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            let new_sel = treemap_state.navigate(nav.selected_child, 0, -1);
-            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+            let new_idx = treemap_state.navigate(sel_idx, 0, -1);
+            if let Some(c) = view_node.children.get(new_idx) {
+                nav.selected_name = c.name.clone();
+            }
         }
         KeyCode::Right | KeyCode::Char('l') => {
-            let new_sel = treemap_state.navigate(nav.selected_child, 1, 0);
-            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+            let new_idx = treemap_state.navigate(sel_idx, 1, 0);
+            if let Some(c) = view_node.children.get(new_idx) {
+                nav.selected_name = c.name.clone();
+            }
         }
         KeyCode::Left | KeyCode::Char('h') => {
-            let new_sel = treemap_state.navigate(nav.selected_child, -1, 0);
-            nav.selected_child = remap_treemap_index(treemap_state, new_sel);
+            let new_idx = treemap_state.navigate(sel_idx, -1, 0);
+            if let Some(c) = view_node.children.get(new_idx) {
+                nav.selected_name = c.name.clone();
+            }
         }
         KeyCode::Enter => {
-            nav.drill_in(root);
+            nav.drill_in(root, filter);
             treemap_state.invalidate();
         }
         KeyCode::Backspace => {
-            nav.drill_out();
+            nav.drill_out(root, filter);
             treemap_state.invalidate();
         }
         _ => {}
     }
-}
-
-/// Map from treemap rect index back to child_index.
-fn remap_treemap_index(state: &TreemapState, rect_idx: usize) -> usize {
-    state
-        .cached_rects
-        .get(rect_idx)
-        .map(|r| r.child_index)
-        .unwrap_or(0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -904,7 +958,7 @@ fn render_browsing(
     root: &DiskNode,
     tree_state: &mut TreeViewState,
     flat_rows: &[FlatRow],
-    nav: &ViewNavState,
+    nav: &mut ViewNavState,
     bar_state: &mut BarState,
     treemap_state: &mut TreemapState,
     sort_config: &SortConfig,
@@ -940,6 +994,17 @@ fn render_browsing(
     let inner_viz = viz_block.inner(viz_area);
     frame.render_widget(viz_block, viz_area);
 
+    match view_mode {
+        ViewMode::Bar => {
+            nav.ensure_valid_selection(root, active_filter.as_ref());
+            sync_bar_list_selection(nav, root, bar_state, active_filter.as_ref());
+        }
+        ViewMode::Treemap => {
+            sync_treemap_selection(nav, root, active_filter.as_ref());
+        }
+        ViewMode::Tree => {}
+    }
+
     // Render the active view
     let selected_node_path = match view_mode {
         ViewMode::Tree => {
@@ -955,24 +1020,33 @@ fn render_browsing(
         }
         ViewMode::Bar => {
             if let Some(view_node) = nav.resolve_view_root(root) {
+                let visible = filter_visible_child_indices(view_node, active_filter.as_ref());
                 let bar_view = BarView {
                     node: view_node,
                     theme,
+                    visible_indices: &visible,
                 };
                 frame.render_stateful_widget(bar_view, inner_viz, bar_state);
             }
-            Some(nav.selected_path())
+            nav.path_indices(root)
         }
         ViewMode::Treemap => {
             if let Some(view_node) = nav.resolve_view_root(root) {
+                let visible = visible_treemap_child_indices(view_node, active_filter.as_ref());
+                let selected_child_index = view_node
+                    .children
+                    .iter()
+                    .position(|c| c.name == nav.selected_name)
+                    .unwrap_or(0);
                 let treemap_view = TreemapView {
                     node: view_node,
                     theme,
-                    selected: nav.selected_child,
+                    selected_child_index,
+                    visible_indices: &visible,
                 };
                 frame.render_stateful_widget(treemap_view, inner_viz, treemap_state);
             }
-            Some(nav.selected_path())
+            nav.path_indices(root)
         }
     };
 

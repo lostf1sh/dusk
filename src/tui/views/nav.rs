@@ -1,77 +1,137 @@
 use crate::model::node::DiskNode;
-use crate::tui::views::tree::resolve_node;
+use crate::model::NodeType;
+use crate::tui::filter::FilterCriteria;
+use crate::tui::views::tree::{filter_visible_child_indices, path_indices_for_named_selection};
 
 /// Shared navigation state for non-tree views (bar, treemap, sunburst).
-/// Represents "we're looking at the children of `view_root_path`, with
-/// `selected_child` highlighted."
+/// Uses stable name paths so sort/delete do not retarget selection.
 pub struct ViewNavState {
-    /// Path indices from scan root to the directory we're viewing.
-    /// Empty = scan root itself.
-    pub view_root_path: Vec<usize>,
-    /// Index of the selected child within the view root's children.
-    pub selected_child: usize,
+    /// Path of directory names from the scan root down to the viewed directory (empty = root).
+    pub view_dir_name_path: Vec<String>,
+    /// Highlighted child name under the current view root.
+    pub selected_name: String,
 }
 
 impl ViewNavState {
     pub fn new() -> Self {
         Self {
-            view_root_path: Vec::new(),
-            selected_child: 0,
+            view_dir_name_path: Vec::new(),
+            selected_name: String::new(),
         }
     }
 
-    pub fn move_next(&mut self, child_count: usize) {
-        if child_count == 0 {
+    /// Keep selection valid after filter changes, tree mutation, or first paint.
+    pub fn ensure_valid_selection(&mut self, root: &DiskNode, filter: Option<&FilterCriteria>) {
+        if self.resolve_view_root(root).is_none() {
+            self.view_dir_name_path.clear();
+        }
+        let Some(view_node) = self.resolve_view_root(root) else {
+            self.selected_name.clear();
+            return;
+        };
+        let visible = filter_visible_child_indices(view_node, filter);
+        let names: Vec<String> = visible
+            .iter()
+            .map(|&i| view_node.children[i].name.clone())
+            .collect();
+        if names.is_empty() {
+            self.selected_name.clear();
+        } else if !names.iter().any(|n| n == &self.selected_name) {
+            self.selected_name = names[0].clone();
+        }
+    }
+
+    pub fn move_next(&mut self, root: &DiskNode, filter: Option<&FilterCriteria>) {
+        let Some(view_node) = self.resolve_view_root(root) else {
+            return;
+        };
+        let visible = filter_visible_child_indices(view_node, filter);
+        let names: Vec<String> = visible
+            .iter()
+            .map(|&i| view_node.children[i].name.clone())
+            .collect();
+        if names.is_empty() {
             return;
         }
-        self.selected_child = (self.selected_child + 1).min(child_count - 1);
+        let pos = names
+            .iter()
+            .position(|n| n == &self.selected_name)
+            .unwrap_or(0);
+        let next = (pos + 1).min(names.len() - 1);
+        self.selected_name = names[next].clone();
     }
 
-    pub fn move_prev(&mut self) {
-        self.selected_child = self.selected_child.saturating_sub(1);
+    pub fn move_prev(&mut self, root: &DiskNode, filter: Option<&FilterCriteria>) {
+        let Some(view_node) = self.resolve_view_root(root) else {
+            return;
+        };
+        let visible = filter_visible_child_indices(view_node, filter);
+        let names: Vec<String> = visible
+            .iter()
+            .map(|&i| view_node.children[i].name.clone())
+            .collect();
+        if names.is_empty() {
+            return;
+        }
+        let pos = names
+            .iter()
+            .position(|n| n == &self.selected_name)
+            .unwrap_or(0);
+        let prev = pos.saturating_sub(1);
+        self.selected_name = names[prev].clone();
     }
 
     /// Drill into the selected child if it's a directory with children.
-    pub fn drill_in(&mut self, root: &DiskNode) {
-        if let Some(view_node) = self.resolve_view_root(root) {
-            if let Some(child) = view_node.children.get(self.selected_child) {
-                if child.node_type == crate::model::NodeType::Dir && !child.children.is_empty() {
-                    self.view_root_path.push(self.selected_child);
-                    self.selected_child = 0;
-                }
-            }
+    pub fn drill_in(&mut self, root: &DiskNode, filter: Option<&FilterCriteria>) {
+        let Some(view_node) = self.resolve_view_root(root) else {
+            return;
+        };
+        let visible = filter_visible_child_indices(view_node, filter);
+        let Some(&idx) = visible
+            .iter()
+            .find(|&&i| view_node.children[i].name == self.selected_name)
+        else {
+            return;
+        };
+        let child = &view_node.children[idx];
+        if child.node_type == NodeType::Dir && !child.children.is_empty() {
+            self.view_dir_name_path.push(child.name.clone());
+            self.pick_first_visible_child(child, filter);
+        }
+    }
+
+    fn pick_first_visible_child(&mut self, node: &DiskNode, filter: Option<&FilterCriteria>) {
+        let visible = filter_visible_child_indices(node, filter);
+        if let Some(&i) = visible.first() {
+            self.selected_name = node.children[i].name.clone();
+        } else {
+            self.selected_name.clear();
         }
     }
 
     /// Drill out to parent directory.
-    pub fn drill_out(&mut self) {
-        if let Some(idx) = self.view_root_path.pop() {
-            self.selected_child = idx;
+    pub fn drill_out(&mut self, root: &DiskNode, filter: Option<&FilterCriteria>) {
+        if let Some(popped) = self.view_dir_name_path.pop() {
+            self.selected_name = popped;
+            self.ensure_valid_selection(root, filter);
         }
     }
 
-    /// Get the full path to the selected child.
-    pub fn selected_path(&self) -> Vec<usize> {
-        let mut path = self.view_root_path.clone();
-        path.push(self.selected_child);
-        path
+    /// Path indices from scan root to the selected node (for FS ops, info, delete).
+    pub fn path_indices(&self, root: &DiskNode) -> Option<Vec<usize>> {
+        path_indices_for_named_selection(root, &self.view_dir_name_path, self.selected_name.as_str())
     }
 
     /// Resolve the view root node from the scan root.
     pub fn resolve_view_root<'a>(&self, root: &'a DiskNode) -> Option<&'a DiskNode> {
-        if self.view_root_path.is_empty() {
-            Some(root)
-        } else {
-            resolve_node(root, &self.view_root_path)
+        let mut node = root;
+        for name in &self.view_dir_name_path {
+            let idx = node.children.iter().position(|c| c.name == *name)?;
+            node = &node.children[idx];
         }
+        Some(node)
     }
 
-    /// How many children does the current view root have?
-    pub fn child_count(&self, root: &DiskNode) -> usize {
-        self.resolve_view_root(root)
-            .map(|n| n.children.len())
-            .unwrap_or(0)
-    }
 }
 
 #[cfg(test)]
@@ -100,38 +160,44 @@ mod tests {
     fn test_nav_basic() {
         let tree = sample_tree();
         let mut nav = ViewNavState::new();
-        assert_eq!(nav.child_count(&tree), 3);
-        assert_eq!(nav.selected_child, 0);
+        nav.ensure_valid_selection(&tree, None);
+        assert_eq!(
+            filter_visible_child_indices(nav.resolve_view_root(&tree).unwrap(), None).len(),
+            3
+        );
+        assert_eq!(nav.selected_name, "big_dir");
 
-        nav.move_next(3);
-        assert_eq!(nav.selected_child, 1);
-        nav.move_next(3);
-        assert_eq!(nav.selected_child, 2);
-        nav.move_next(3); // clamp
-        assert_eq!(nav.selected_child, 2);
+        nav.move_next(&tree, None);
+        assert_eq!(nav.selected_name, "small_dir");
+        nav.move_next(&tree, None);
+        assert_eq!(nav.selected_name, "readme.md");
+        nav.move_next(&tree, None);
+        assert_eq!(nav.selected_name, "readme.md");
 
-        nav.move_prev();
-        assert_eq!(nav.selected_child, 1);
+        nav.move_prev(&tree, None);
+        assert_eq!(nav.selected_name, "small_dir");
     }
 
     #[test]
     fn test_drill_in_out() {
         let tree = sample_tree();
         let mut nav = ViewNavState::new();
+        nav.ensure_valid_selection(&tree, None);
+        assert_eq!(nav.selected_name, "big_dir");
 
-        // Drill into big_dir (index 0)
-        nav.drill_in(&tree);
-        assert_eq!(nav.view_root_path, vec![0]);
-        assert_eq!(nav.selected_child, 0);
-        assert_eq!(nav.child_count(&tree), 2); // a.dat, b.dat
+        nav.drill_in(&tree, None);
+        assert_eq!(nav.view_dir_name_path, vec!["big_dir".to_string()]);
+        assert_eq!(nav.selected_name, "a.dat");
+        assert_eq!(
+            filter_visible_child_indices(nav.resolve_view_root(&tree).unwrap(), None).len(),
+            2
+        );
 
-        // Can't drill into a file
-        nav.drill_in(&tree);
-        assert_eq!(nav.view_root_path, vec![0]); // unchanged
+        nav.drill_in(&tree, None);
+        assert_eq!(nav.view_dir_name_path, vec!["big_dir".to_string()]);
 
-        // Drill out
-        nav.drill_out();
-        assert_eq!(nav.view_root_path, Vec::<usize>::new());
-        assert_eq!(nav.selected_child, 0); // restored
+        nav.drill_out(&tree, None);
+        assert_eq!(nav.view_dir_name_path, Vec::<String>::new());
+        assert_eq!(nav.selected_name, "big_dir");
     }
 }

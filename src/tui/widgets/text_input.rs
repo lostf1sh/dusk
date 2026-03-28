@@ -3,9 +3,22 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 
+fn char_count(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// Byte offset of the character at `char_idx`, or `s.len()` if `char_idx` is past the end.
+fn byte_at_char_index(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or_else(|| s.len())
+}
+
 /// A simple single-line text input.
 pub struct TextInput<'a> {
     pub query: &'a str,
+    /// Cursor position in **Unicode scalar values** (user-perceived characters).
     pub cursor: usize,
     pub label: &'a str,
 }
@@ -58,7 +71,7 @@ impl Widget for TextInput<'_> {
     }
 }
 
-/// State for a text input: the query string and cursor position.
+/// State for a text input: the query string and cursor position (character index).
 #[derive(Debug, Clone)]
 pub struct TextInputState {
     pub query: String,
@@ -74,22 +87,33 @@ impl TextInputState {
     }
 
     pub fn insert(&mut self, ch: char) {
-        self.query.insert(self.cursor, ch);
+        let byte = byte_at_char_index(&self.query, self.cursor);
+        self.query.insert(byte, ch);
         self.cursor += 1;
     }
 
     pub fn backspace(&mut self) {
-        if self.cursor > 0 {
-            self.cursor -= 1;
-            self.query.remove(self.cursor);
+        if self.cursor == 0 {
+            return;
         }
+        self.cursor -= 1;
+        let byte = byte_at_char_index(&self.query, self.cursor);
+        let rest = &self.query[byte..];
+        let ch = rest.chars().next().expect("cursor on valid char boundary");
+        let len = ch.len_utf8();
+        self.query.drain(byte..byte + len);
     }
 
     #[allow(dead_code)]
     pub fn delete(&mut self) {
-        if self.cursor < self.query.len() {
-            self.query.remove(self.cursor);
+        if self.cursor >= char_count(&self.query) {
+            return;
         }
+        let byte = byte_at_char_index(&self.query, self.cursor);
+        let rest = &self.query[byte..];
+        let ch = rest.chars().next().expect("cursor on valid char boundary");
+        let len = ch.len_utf8();
+        self.query.drain(byte..byte + len);
     }
 
     pub fn move_left(&mut self) {
@@ -97,7 +121,8 @@ impl TextInputState {
     }
 
     pub fn move_right(&mut self) {
-        self.cursor = (self.cursor + 1).min(self.query.len());
+        let max = char_count(&self.query);
+        self.cursor = (self.cursor + 1).min(max);
     }
 
     #[allow(dead_code)]
@@ -107,7 +132,7 @@ impl TextInputState {
 
     #[allow(dead_code)]
     pub fn move_end(&mut self) {
-        self.cursor = self.query.len();
+        self.cursor = char_count(&self.query);
     }
 
     #[allow(dead_code)]
@@ -149,5 +174,35 @@ mod tests {
         assert_eq!(state.cursor, 0);
         state.move_end();
         assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn test_unicode_insert_and_backspace() {
+        let mut state = TextInputState::new();
+        state.insert('é');
+        state.insert('a');
+        assert_eq!(state.query, "éa");
+        assert_eq!(state.cursor, 2);
+        state.backspace();
+        assert_eq!(state.query, "é");
+        assert_eq!(state.cursor, 1);
+        state.backspace();
+        assert_eq!(state.query, "");
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_unicode_movement() {
+        let mut state = TextInputState::new();
+        state.query = "αβγ".to_string();
+        state.cursor = 3;
+        state.move_left();
+        assert_eq!(state.cursor, 2);
+        state.move_left();
+        assert_eq!(state.cursor, 1);
+        state.move_left();
+        assert_eq!(state.cursor, 0);
+        state.move_right();
+        assert_eq!(state.cursor, 1);
     }
 }

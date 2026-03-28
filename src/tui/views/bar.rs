@@ -26,14 +26,21 @@ impl BarState {
 pub struct BarView<'a> {
     pub node: &'a DiskNode,
     pub theme: &'a Theme,
+    /// Indices into `node.children` to show (matches tree filter).
+    pub visible_indices: &'a [usize],
 }
 
 impl StatefulWidget for BarView<'_> {
     type State = BarState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let parent_size = self.node.size;
-        if parent_size == 0 || self.node.children.is_empty() {
+        let visible_sum: u64 = self
+            .visible_indices
+            .iter()
+            .filter_map(|&i| self.node.children.get(i).map(|c| c.size))
+            .sum();
+
+        if visible_sum == 0 || self.visible_indices.is_empty() {
             let empty = List::new(vec![ListItem::new("  (empty)")]);
             StatefulWidget::render(empty, area, buf, &mut state.list_state);
             return;
@@ -42,20 +49,20 @@ impl StatefulWidget for BarView<'_> {
         let bar_width = (area.width as usize * 35 / 100).clamp(8, 50);
 
         let items: Vec<ListItem> = self
-            .node
-            .children
+            .visible_indices
             .iter()
             .enumerate()
-            .map(|(i, child)| {
-                let pct = child.size as f64 / parent_size as f64 * 100.0;
+            .map(|(list_i, &i)| {
+                let child = &self.node.children[i];
+                let pct = child.size as f64 / visible_sum as f64 * 100.0;
                 let fill_count =
-                    (bar_width as f64 * child.size as f64 / parent_size as f64).round() as usize;
+                    (bar_width as f64 * child.size as f64 / visible_sum as f64).round() as usize;
                 let empty_count = bar_width.saturating_sub(fill_count);
 
                 let fill_str: String = "█".repeat(fill_count);
                 let empty_str: String = "░".repeat(empty_count);
 
-                let bar_color = self.theme.segment_color(i);
+                let bar_color = self.theme.segment_color(list_i);
                 let size_str = format_size(child.size, BINARY);
 
                 let name = if child.node_type == crate::model::NodeType::Dir {
@@ -75,7 +82,7 @@ impl StatefulWidget for BarView<'_> {
                 };
 
                 let name_style = self.theme.node_style(&child.node_type);
-                let size_style = self.theme.size_style(child.size, parent_size);
+                let size_style = self.theme.size_style(child.size, visible_sum);
 
                 let line = Line::from(vec![
                     Span::styled(fill_str, ratatui::style::Style::default().fg(bar_color)),

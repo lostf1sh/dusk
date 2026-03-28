@@ -194,6 +194,27 @@ fn flatten_children(
     }
 }
 
+/// Child indices of `node` that should appear in bar/treemap under the active filter
+/// (same rules as the tree view).
+pub fn filter_visible_child_indices(
+    node: &DiskNode,
+    filter: Option<&FilterCriteria>,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    for (i, child) in node.children.iter().enumerate() {
+        if let Some(f) = filter {
+            if !f.matches(child) {
+                continue;
+            }
+            if child.node_type == NodeType::Dir && !has_matching_descendant(child, f) {
+                continue;
+            }
+        }
+        out.push(i);
+    }
+    out
+}
+
 /// Check if a directory has any descendant that matches the filter.
 fn has_matching_descendant(node: &DiskNode, filter: &FilterCriteria) -> bool {
     for child in &node.children {
@@ -297,6 +318,43 @@ pub fn resolve_fs_path(
         fs_path.push(&node.name);
     }
     Some(fs_path)
+}
+
+/// Resolve a filesystem path from a chain of child names under the scan root (stable across sort).
+pub fn resolve_fs_path_by_name_path(
+    root_path: &std::path::Path,
+    root: &DiskNode,
+    name_path: &[String],
+) -> Option<std::path::PathBuf> {
+    let mut fs_path = root_path.to_path_buf();
+    let mut node = root;
+    for name in name_path {
+        let idx = node.children.iter().position(|c| c.name == *name)?;
+        node = &node.children[idx];
+        fs_path.push(name);
+    }
+    Some(fs_path)
+}
+
+/// Path indices for a view directory plus selected child name (stable across sort).
+pub fn path_indices_for_named_selection(
+    root: &DiskNode,
+    view_dir_name_path: &[String],
+    selected_name: &str,
+) -> Option<Vec<usize>> {
+    if selected_name.is_empty() {
+        return None;
+    }
+    let mut indices = Vec::new();
+    let mut node = root;
+    for name in view_dir_name_path {
+        let idx = node.children.iter().position(|c| c.name == *name)?;
+        indices.push(idx);
+        node = &node.children[idx];
+    }
+    let idx = node.children.iter().position(|c| c.name == selected_name)?;
+    indices.push(idx);
+    Some(indices)
 }
 
 #[cfg(test)]
