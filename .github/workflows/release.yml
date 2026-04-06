@@ -6,84 +6,30 @@ on:
       - 'v*.*.*'
 
 jobs:
-  linux:
-    name: Linux x86_64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build
-        run: |
-          rustup target add x86_64-unknown-linux-musl
-          cargo build --release --target x86_64-unknown-linux-musl
-          cd target/x86_64-unknown-linux-musl/release
-          tar czf dusk-x86_64-unknown-linux-musl.tar.gz dusk
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: dusk-linux-x86_64
-          path: target/x86_64-unknown-linux-musl/release/dusk-x86_64-unknown-linux-musl.tar.gz
-
-  macos-intel:
-    name: macOS x86_64
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build
-        run: |
-          rustup target add x86_64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
-          cd target/x86_64-apple-darwin/release
-          tar czf dusk-x86_64-apple-darwin.tar.gz dusk
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: dusk-macos-x86_64
-          path: target/x86_64-apple-darwin/release/dusk-x86_64-apple-darwin.tar.gz
-
-  macos-arm:
-    name: macOS arm64
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build
-        run: |
-          rustup target add aarch64-apple-darwin
-          cargo build --release --target aarch64-apple-darwin
-          cd target/aarch64-apple-darwin/release
-          tar czf dusk-aarch64-apple-darwin.tar.gz dusk
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: dusk-macos-arm64
-          path: target/aarch64-apple-darwin/release/dusk-aarch64-apple-darwin.tar.gz
-
   release:
-    name: Create Release
-    needs: [linux, macos-intel, macos-arm]
+    name: Build and Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add target
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Build
+        run: |
+          cargo build --release --target x86_64-unknown-linux-musl
+          cd target/x86_64-unknown-linux-musl/release
+          tar czf dusk-x86_64-unknown-linux-musl.tar.gz dusk
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            artifacts/dusk-linux-x86_64/dusk-x86_64-unknown-linux-musl.tar.gz
-            artifacts/dusk-macos-x86_64/dusk-x86_64-apple-darwin.tar.gz
-            artifacts/dusk-macos-arm64/dusk-aarch64-apple-darwin.tar.gz
+          files: target/x86_64-unknown-linux-musl/release/dusk-x86_64-unknown-linux-musl.tar.gz
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
