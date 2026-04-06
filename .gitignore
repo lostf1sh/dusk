@@ -1,1 +1,6 @@
 /target
+dist/
+*.tar.gz
+*.zip
+.env
+.env.*

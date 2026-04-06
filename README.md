@@ -2,7 +2,7 @@
 
 Interactive disk usage analyzer for the terminal. Scan directories, visualize space usage across multiple views, and manage files — all without leaving your shell.
 
-![Rust](https://img.shields.io/badge/rust-2021-orange) ![License](https://img.shields.io/badge/license-MIT-blue)
+![Rust](https://img.shields.io/badge/rust-2021-orange) ![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/lostf1sh/dusk/actions/workflows/ci.yml/badge.svg) ![Release](https://github.com/lostf1sh/dusk/actions/workflows/release.yml/badge.svg)
 
 ## Features
 
@@ -16,17 +16,42 @@ Interactive disk usage analyzer for the terminal. Scan directories, visualize sp
 - **File info** — permissions, owner, MIME type, inode, timestamps
 - **`.gitignore` aware** — respects ignore rules automatically
 
-## Install
+## Installation
+
+### Quick install (recommended)
 
 ```bash
-cargo install --path .
+curl -fsSL https://raw.githubusercontent.com/lostf1sh/dusk/main/install.sh | bash
 ```
 
-Or build from source:
+This automatically downloads the latest binary for your platform.
+
+### Binary releases
+
+Download a pre-built binary from the [GitHub Releases](https://github.com/lostf1sh/dusk/releases) page:
 
 ```bash
+# Linux (x86_64)
+curl -fsSL https://github.com/lostf1sh/dusk/releases/latest/download/dusk-x86_64-unknown-linux-musl.tar.gz | tar xz
+sudo mv dusk /usr/local/bin/
+
+# Or with wget
+wget -O dusk.tar.gz https://github.com/lostf1sh/dusk/releases/latest/download/dusk-x86_64-unknown-linux-musl.tar.gz
+tar xzf dusk.tar.gz
+sudo mv dusk /usr/local/bin/
+```
+
+### From source
+
+```bash
+# Using cargo (requires Rust 1.75+)
+cargo install dusk
+
+# Or build manually
+git clone https://github.com/lostf1sh/dusk
+cd dusk
 cargo build --release
-./target/release/dusk
+sudo cp target/release/dusk /usr/local/bin/
 ```
 
 ## Usage
@@ -132,7 +157,7 @@ src/
         └── text_input.rs    # Text input for search/filter
 ```
 
-**~4,100 lines of Rust** | **31 tests** | **0 clippy warnings**
+**~4,100 lines of Rust** | **36 tests** | **0 clippy warnings**
 
 ### Key Design Decisions
 

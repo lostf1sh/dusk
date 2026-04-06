@@ -2,7 +2,18 @@
 name = "dusk"
 version = "0.1.0"
 edition = "2021"
+authors = ["dusk contributors"]
 description = "Interactive disk usage analyzer with treemap visualization for your terminal"
+license = "MIT"
+repository = "https://github.com/lostf1sh/dusk"
+homepage = "https://github.com/lostf1sh/dusk"
+keywords = ["disk-usage", "treemap", "terminal", "tui", "file-manager"]
+categories = ["command-line-utilities"]
+rust-version = "1.77"
+
+[[bin]]
+name = "dusk"
+path = "src/main.rs"
 
 [dependencies]
 ratatui = "0.29"
@@ -22,3 +33,9 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
