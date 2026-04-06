@@ -173,7 +173,7 @@ fn absorb_processed_entries(
             modified: entry.modified,
         });
 
-        if files_found.is_multiple_of(500) {
+        if *files_found % 500 == 0 {
             let _ = tx.send(ScanUpdate::Progress {
                 files_found: *files_found,
                 bytes_found: *bytes_found,

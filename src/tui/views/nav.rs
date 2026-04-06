@@ -24,6 +24,8 @@ impl ViewNavState {
     pub fn ensure_valid_selection(&mut self, root: &DiskNode, filter: Option<&FilterCriteria>) {
         if self.resolve_view_root(root).is_none() {
             self.view_dir_name_path.clear();
+            self.selected_name.clear();
+            return;
         }
         let Some(view_node) = self.resolve_view_root(root) else {
             self.selected_name.clear();

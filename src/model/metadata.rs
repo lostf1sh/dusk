@@ -114,7 +114,12 @@ fn format_time(time: SystemTime) -> String {
             let hours = remaining / 3600;
             let minutes = (remaining % 3600) / 60;
 
-            // Approximate date calculation
+            // Bounds check to prevent overflow in days_to_ymd
+            // The algorithm supports dates up to year ~10^9 safely
+            if days > i64::MAX as u64 / 2 {
+                return "far future".to_string();
+            }
+
             let (year, month, day) = days_to_ymd(days);
             format!("{year:04}-{month:02}-{day:02} {hours:02}:{minutes:02} UTC")
         }
