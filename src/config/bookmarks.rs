@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -16,22 +17,36 @@ pub struct BookmarkStore {
 
 impl BookmarkStore {
     /// Load bookmarks from the config file, or return empty store.
-    pub fn load() -> Self {
-        let path = config_path();
-        match std::fs::read_to_string(&path) {
-            Ok(content) => toml::from_str(&content).unwrap_or_default(),
-            Err(_) => Self::default(),
+    pub fn load() -> anyhow::Result<Self> {
+        Self::load_from_path(&config_path())
+    }
+
+    fn load_from_path(path: &Path) -> anyhow::Result<Self> {
+        match std::fs::read_to_string(path) {
+            Ok(content) => toml::from_str(&content)
+                .map_err(anyhow::Error::from)
+                .map_err(|error| error.context(format!("failed to parse {}", path.display()))),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(Self::default()),
+            Err(error) => Err(error).map_err(|error| {
+                anyhow::Error::from(error).context(format!("failed to read {}", path.display()))
+            }),
         }
     }
 
     /// Save bookmarks to the config file.
     pub fn save(&self) -> anyhow::Result<()> {
-        let path = config_path();
+        self.save_to_path(&config_path())
+    }
+
+    fn save_to_path(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(&path, content)?;
+        let temp_path = path.with_extension("toml.tmp");
+        std::fs::write(&temp_path, content)?;
+        std::fs::rename(&temp_path, path)?;
         Ok(())
     }
 
@@ -74,6 +89,7 @@ fn config_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn test_add_duplicate() {
@@ -101,5 +117,31 @@ mod tests {
         let deserialized: BookmarkStore = toml::from_str(&serialized).unwrap();
         assert_eq!(deserialized.bookmarks.len(), 1);
         assert_eq!(deserialized.bookmarks[0].path, PathBuf::from("/tmp/test"));
+    }
+
+    #[test]
+    fn test_load_invalid_toml_reports_error() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("bookmarks.toml");
+        std::fs::write(&path, "not = [valid").unwrap();
+
+        let error = BookmarkStore::load_from_path(&path).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("failed to parse"));
+        assert!(message.contains("bookmarks.toml"));
+    }
+
+    #[test]
+    fn test_save_to_path_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("nested").join("bookmarks.toml");
+
+        let mut store = BookmarkStore::default();
+        store.add("/tmp/test".into(), "test dir".into());
+        store.save_to_path(&path).unwrap();
+
+        let loaded = BookmarkStore::load_from_path(&path).unwrap();
+        assert_eq!(loaded.bookmarks.len(), 1);
+        assert_eq!(loaded.bookmarks[0].label, "test dir");
     }
 }
