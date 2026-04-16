@@ -17,10 +17,16 @@ pub struct DiskNode {
     pub children: Vec<DiskNode>,
     pub depth: usize,
     pub modified: Option<SystemTime>,
+    pub file_count: u64,
+    pub dir_count: u64,
 }
 
 impl DiskNode {
     pub fn new(name: String, size: u64, node_type: NodeType, depth: usize) -> Self {
+        let file_count = match node_type {
+            NodeType::File | NodeType::Symlink => 1,
+            NodeType::Dir => 0,
+        };
         Self {
             name,
             size,
@@ -28,27 +34,19 @@ impl DiskNode {
             children: Vec::new(),
             depth,
             modified: None,
+            file_count,
+            dir_count: 0,
         }
     }
 
     /// Total number of file nodes in this subtree (recursive).
     pub fn total_files(&self) -> u64 {
-        match self.node_type {
-            NodeType::File => 1,
-            NodeType::Symlink => 1,
-            NodeType::Dir => self.children.iter().map(|c| c.total_files()).sum(),
-        }
+        self.file_count
     }
 
     /// Total number of directory nodes in this subtree (recursive, excluding self).
     pub fn total_dirs(&self) -> u64 {
-        self.children
-            .iter()
-            .map(|c| {
-                let self_count = if c.node_type == NodeType::Dir { 1 } else { 0 };
-                self_count + c.total_dirs()
-            })
-            .sum()
+        self.dir_count
     }
 
     /// Recursively sort children by size (largest first).
@@ -64,7 +62,7 @@ impl DiskNode {
         self.children.sort_by(|a, b| {
             let ord = match config.field {
                 SortField::Size => b.size.cmp(&a.size),
-                SortField::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                SortField::Name => a.name.chars().map(|c| c.to_ascii_lowercase()).cmp(b.name.chars().map(|c| c.to_ascii_lowercase())),
                 SortField::Modified => {
                     let a_time = a.modified.unwrap_or(SystemTime::UNIX_EPOCH);
                     let b_time = b.modified.unwrap_or(SystemTime::UNIX_EPOCH);
@@ -87,9 +85,25 @@ impl DiskNode {
         }
     }
 
+    /// Recalculate sizes and counts for tests.
+    #[cfg(test)]
+    pub fn update_counts(&mut self) {
+        if self.node_type == NodeType::Dir {
+            for child in &mut self.children {
+                child.update_counts();
+            }
+            self.size = self.children.iter().map(|c| c.size).sum();
+            self.file_count = self.children.iter().map(|c| c.file_count).sum();
+            self.dir_count = self.children.iter().map(|c| {
+                let self_count = if c.node_type == NodeType::Dir { 1 } else { 0 };
+                self_count + c.dir_count
+            }).sum();
+        }
+    }
+
     /// Remove a child node at the given path and subtract its size from ancestors.
-    /// Returns the removed node's size.
-    pub fn remove_node(&mut self, path_indices: &[usize]) -> Option<u64> {
+    /// Returns the removed node's size, file_count, dir_count.
+    pub fn remove_node(&mut self, path_indices: &[usize]) -> Option<(u64, u64, u64)> {
         if path_indices.is_empty() {
             return None; // can't remove root
         }
@@ -99,15 +113,22 @@ impl DiskNode {
                 return None;
             }
             let removed_size = self.children[idx].size;
+            let removed_files = self.children[idx].file_count;
+            let removed_dirs = self.children[idx].dir_count + if self.children[idx].node_type == NodeType::Dir { 1 } else { 0 };
+            
             self.children.remove(idx);
             self.size = self.size.saturating_sub(removed_size);
-            return Some(removed_size);
+            self.file_count = self.file_count.saturating_sub(removed_files);
+            self.dir_count = self.dir_count.saturating_sub(removed_dirs);
+            return Some((removed_size, removed_files, removed_dirs));
         }
         // Recurse to parent
         let child = self.children.get_mut(path_indices[0])?;
-        let removed_size = child.remove_node(&path_indices[1..])?;
+        let (removed_size, removed_files, removed_dirs) = child.remove_node(&path_indices[1..])?;
         self.size = self.size.saturating_sub(removed_size);
-        Some(removed_size)
+        self.file_count = self.file_count.saturating_sub(removed_files);
+        self.dir_count = self.dir_count.saturating_sub(removed_dirs);
+        Some((removed_size, removed_files, removed_dirs))
     }
 }
 
@@ -192,6 +213,7 @@ mod tests {
         root.children.push(readme);
         root.children.push(big_dir);
         root.size = 511;
+        root.update_counts();
 
         root
     }
@@ -255,17 +277,29 @@ mod tests {
         tree.sort_children_by_size();
         // tree.children: [big_dir(500), small_dir(10), readme.md(1)]
         assert_eq!(tree.size, 511);
+        assert_eq!(tree.total_files(), 4);
+        assert_eq!(tree.total_dirs(), 2);
 
         // Remove readme.md (index 2)
         let removed = tree.remove_node(&[2]);
-        assert_eq!(removed, Some(1));
+        assert_eq!(removed, Some((1, 1, 0)));
         assert_eq!(tree.children.len(), 2);
         assert_eq!(tree.size, 510);
+        assert_eq!(tree.total_files(), 3);
 
         // Remove a.dat from big_dir (path [0, 0])
         let removed = tree.remove_node(&[0, 0]);
-        assert_eq!(removed, Some(300));
+        assert_eq!(removed, Some((300, 1, 0)));
         assert_eq!(tree.size, 210);
         assert_eq!(tree.children[0].size, 200);
+        assert_eq!(tree.total_files(), 2);
+        assert_eq!(tree.total_dirs(), 2);
+
+        // Remove small_dir (path [1])
+        let removed = tree.remove_node(&[1]);
+        assert_eq!(removed, Some((10, 1, 1)));
+        assert_eq!(tree.size, 200);
+        assert_eq!(tree.total_files(), 1);
+        assert_eq!(tree.total_dirs(), 1);
     }
 }

@@ -256,6 +256,11 @@ fn build_tree(root: &Path, entries: &[RawEntry]) -> DiskNode {
         // Directory size = sum of children sizes
         if node.node_type == NodeType::Dir {
             node.size = node.children.iter().map(|c| c.size).sum();
+            node.file_count = node.children.iter().map(|c| c.file_count).sum();
+            node.dir_count = node.children.iter().map(|c| {
+                let self_count = if c.node_type == NodeType::Dir { 1 } else { 0 };
+                self_count + c.dir_count
+            }).sum();
         }
 
         node

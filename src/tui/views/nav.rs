@@ -32,14 +32,10 @@ impl ViewNavState {
             return;
         };
         let visible = filter_visible_child_indices(view_node, filter);
-        let names: Vec<String> = visible
-            .iter()
-            .map(|&i| view_node.children[i].name.clone())
-            .collect();
-        if names.is_empty() {
+        if visible.is_empty() {
             self.selected_name.clear();
-        } else if !names.iter().any(|n| n == &self.selected_name) {
-            self.selected_name = names[0].clone();
+        } else if !visible.iter().any(|&i| view_node.children[i].name == self.selected_name) {
+            self.selected_name = view_node.children[visible[0]].name.clone();
         }
     }
 
@@ -48,19 +44,15 @@ impl ViewNavState {
             return;
         };
         let visible = filter_visible_child_indices(view_node, filter);
-        let names: Vec<String> = visible
-            .iter()
-            .map(|&i| view_node.children[i].name.clone())
-            .collect();
-        if names.is_empty() {
+        if visible.is_empty() {
             return;
         }
-        let pos = names
+        let pos = visible
             .iter()
-            .position(|n| n == &self.selected_name)
+            .position(|&i| view_node.children[i].name == self.selected_name)
             .unwrap_or(0);
-        let next = (pos + 1).min(names.len() - 1);
-        self.selected_name = names[next].clone();
+        let next = (pos + 1).min(visible.len() - 1);
+        self.selected_name = view_node.children[visible[next]].name.clone();
     }
 
     pub fn move_prev(&mut self, root: &DiskNode, filter: Option<&FilterCriteria>) {
@@ -68,19 +60,15 @@ impl ViewNavState {
             return;
         };
         let visible = filter_visible_child_indices(view_node, filter);
-        let names: Vec<String> = visible
-            .iter()
-            .map(|&i| view_node.children[i].name.clone())
-            .collect();
-        if names.is_empty() {
+        if visible.is_empty() {
             return;
         }
-        let pos = names
+        let pos = visible
             .iter()
-            .position(|n| n == &self.selected_name)
+            .position(|&i| view_node.children[i].name == self.selected_name)
             .unwrap_or(0);
         let prev = pos.saturating_sub(1);
-        self.selected_name = names[prev].clone();
+        self.selected_name = view_node.children[visible[prev]].name.clone();
     }
 
     /// Drill into the selected child if it's a directory with children.
@@ -158,6 +146,7 @@ mod tests {
         root.children.push(big_dir);
         root.children.push(small_dir);
         root.children.push(readme);
+        root.update_counts();
         root
     }
 

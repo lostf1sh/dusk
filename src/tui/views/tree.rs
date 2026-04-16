@@ -383,6 +383,7 @@ mod tests {
         root.children.push(big_dir);
         root.children.push(small_dir);
         root.children.push(readme);
+        root.update_counts();
         root
     }
 
