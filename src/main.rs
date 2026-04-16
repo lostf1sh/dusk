@@ -1,12 +1,8 @@
-mod config;
-mod model;
-mod scanner;
-mod tui;
-
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use clap::Parser;
+use dusk::{scanner, tui};
 
 #[derive(Parser)]
 #[command(
@@ -44,9 +40,15 @@ fn main() -> anyhow::Result<()> {
     });
 
     let mut terminal = ratatui::init();
+    let _restore_terminal = RestoreTerminalOnDrop;
     let mut app = tui::App::new(root, rx, !cli.no_trash);
-    let result = app.run(&mut terminal);
-    ratatui::restore();
+    app.run(&mut terminal)
+}
 
-    result
+struct RestoreTerminalOnDrop;
+
+impl Drop for RestoreTerminalOnDrop {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
 }
