@@ -44,7 +44,7 @@ sudo mv dusk /usr/local/bin/
 ### From source
 
 ```bash
-# Using cargo (requires Rust 1.75+)
+# Using cargo (requires Rust 1.77+)
 cargo install dusk
 
 # Or build manually
@@ -157,7 +157,7 @@ src/
         └── text_input.rs    # Text input for search/filter
 ```
 
-**~4,100 lines of Rust** | **36 tests** | **0 clippy warnings**
+The codebase is a single Rust crate with focused modules for scanning, the disk tree model, configuration, and the terminal UI.
 
 ### Key Design Decisions
 
@@ -180,6 +180,7 @@ src/
 | `humansize` | Human-readable file sizes |
 | `serde` + `toml` | Bookmark serialization |
 | `dirs` | XDG config directory paths |
+| `unicode-width` | Unicode-safe terminal text layout |
 | `anyhow` + `thiserror` | Error handling |
 
 ## License

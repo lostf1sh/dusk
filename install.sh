@@ -29,35 +29,53 @@ get_latest_version() {
     curl -sL "https://api.github.com/repos/$REPO/releases/latest" | grep -o '"tag_name": ".*"' | cut -d'"' -f4
 }
 
+resolve_target() {
+    local os="$1"
+    local arch="$2"
+
+    case "$os/$arch" in
+        linux/x86_64) echo "x86_64-unknown-linux-musl" ;;
+        macos/x86_64) echo "x86_64-apple-darwin" ;;
+        macos/aarch64) echo "aarch64-apple-darwin" ;;
+        *) echo "" ;;
+    esac
+}
+
 download_release() {
     local version="$1"
     local os="$2"
     local arch="$3"
-    local ext="tar.gz"
-    
-    if [ "$os" = "windows" ]; then
-        ext="zip"
+    local target
+    target=$(resolve_target "$os" "$arch")
+
+    if [ -z "$target" ]; then
+        echo "No prebuilt release for $os/$arch. Falling back to source install..."
+        install_from_source
+        return $?
     fi
-    
-    local filename="dusk-${arch}-unknown-${os}-musl.${ext}"
+
+    local filename="dusk-${target}.tar.gz"
     local url="https://github.com/$REPO/releases/download/${version}/${filename}"
-    
-    echo "Downloading dusk $version for $os/$arch..."
-    curl -fSL "$url" -o "/tmp/dusk.${ext}" || return 1
-    
+    local tmpdir
+    tmpdir=$(mktemp -d)
+    local archive="$tmpdir/$filename"
+
+    echo "Downloading dusk $version for $target..."
+    curl -fSL "$url" -o "$archive" || {
+        rm -rf "$tmpdir"
+        return 1
+    }
+
     echo "Extracting..."
-    tar xzf "/tmp/dusk.${ext}" -C /tmp 2>/dev/null || unzip -q "/tmp/dusk.${ext}" -d /tmp
-    
-    local binary="/tmp/dusk"
+    tar xzf "$archive" -C "$tmpdir"
+
+    local binary="$tmpdir/dusk"
     if [ ! -f "$binary" ]; then
-        binary="/tmp/dusk-${version}-${arch}-unknown-${os}-musl/dusk"
-    fi
-    
-    if [ ! -f "$binary" ]; then
-        echo "Error: Could not find extracted binary"
+        echo "Error: Could not find extracted binary in $filename"
+        rm -rf "$tmpdir"
         return 1
     fi
-    
+
     echo "Installing to $INSTALL_DIR..."
     if [ "$FORCE" = "true" ] || [ -w "$INSTALL_DIR" ]; then
         mv "$binary" "$INSTALL_DIR/dusk"
@@ -66,17 +84,16 @@ download_release() {
     else
         echo "Error: Cannot write to $INSTALL_DIR (try with sudo)"
         echo "  sudo mv $binary $INSTALL_DIR/dusk"
+        rm -rf "$tmpdir"
         return 1
     fi
-    
-    rm -f "/tmp/dusk.${ext}"
-    rm -rf "/tmp/dusk-"*
-    
+
+    rm -rf "$tmpdir"
     return 0
 }
 
 install_from_source() {
-    echo "Building from source (requires Rust 1.75+)..."
+    echo "Building from source (requires Rust 1.77+)..."
     
     if ! command -v cargo &> /dev/null; then
         echo "Error: cargo not found. Install Rust from https://rustup.rs"
