@@ -86,19 +86,31 @@ fn format_permissions(mode: u32) -> String {
     s.push(file_type);
 
     let perms = [
-        (0o400, 'r'),
-        (0o200, 'w'),
-        (0o100, 'x'),
-        (0o040, 'r'),
-        (0o020, 'w'),
-        (0o010, 'x'),
-        (0o004, 'r'),
-        (0o002, 'w'),
-        (0o001, 'x'),
+        (0o400, 'r', '-'),
+        (0o200, 'w', '-'),
+        (
+            0o100,
+            if mode & 0o4000 != 0 { 's' } else { 'x' },
+            if mode & 0o4000 != 0 { 'S' } else { '-' },
+        ),
+        (0o040, 'r', '-'),
+        (0o020, 'w', '-'),
+        (
+            0o010,
+            if mode & 0o2000 != 0 { 's' } else { 'x' },
+            if mode & 0o2000 != 0 { 'S' } else { '-' },
+        ),
+        (0o004, 'r', '-'),
+        (0o002, 'w', '-'),
+        (
+            0o001,
+            if mode & 0o1000 != 0 { 't' } else { 'x' },
+            if mode & 0o1000 != 0 { 'T' } else { '-' },
+        ),
     ];
 
-    for (bit, ch) in perms {
-        s.push(if mode & bit != 0 { ch } else { '-' });
+    for (bit, present, absent) in perms {
+        s.push(if mode & bit != 0 { present } else { absent });
     }
 
     s
@@ -152,6 +164,8 @@ mod tests {
         assert_eq!(format_permissions(0o100755), "-rwxr-xr-x");
         assert_eq!(format_permissions(0o100644), "-rw-r--r--");
         assert_eq!(format_permissions(0o040755), "drwxr-xr-x");
+        assert_eq!(format_permissions(0o104755), "-rwsr-xr-x");
+        assert_eq!(format_permissions(0o101777), "-rwxrwxrwt");
     }
 
     #[test]
