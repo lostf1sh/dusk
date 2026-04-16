@@ -14,11 +14,47 @@ use crate::model::node::{DiskNode, NodeType};
 use crate::scanner::ignore_rules::build_walk;
 
 const SCAN_BATCH_SIZE: usize = 1024;
+const MAX_WARNING_SAMPLES: usize = 5;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScanWarnings {
+    pub skipped_entries: u64,
+    pub sample_errors: Vec<String>,
+}
+
+impl ScanWarnings {
+    fn push(&mut self, message: String) {
+        self.skipped_entries += 1;
+        if self.sample_errors.len() < MAX_WARNING_SAMPLES {
+            self.sample_errors.push(message);
+        }
+    }
+
+    pub fn summary(&self) -> Option<String> {
+        if self.skipped_entries == 0 {
+            return None;
+        }
+
+        Some(match self.sample_errors.first() {
+            Some(sample) => format!(
+                "Scan skipped {} entries. First issue: {sample}",
+                self.skipped_entries
+            ),
+            None => format!("Scan skipped {} entries", self.skipped_entries),
+        })
+    }
+}
 
 /// Messages sent from the scanner thread to the TUI.
 pub enum ScanUpdate {
-    Progress { files_found: u64, bytes_found: u64 },
-    Complete(DiskNode),
+    Progress {
+        files_found: u64,
+        bytes_found: u64,
+    },
+    Complete {
+        root: DiskNode,
+        warnings: ScanWarnings,
+    },
     Error(String),
 }
 
@@ -38,12 +74,20 @@ struct ProcessedEntry {
     inode_key: Option<(u64, u64)>,
 }
 
+enum ProcessPathOutcome {
+    Entry(ProcessedEntry),
+    Warning(String),
+}
+
 /// Run a full directory scan. Meant to be called on a spawned thread.
 /// Sends progress updates and a final Complete/Error via `tx`.
 pub fn scan(root: PathBuf, tx: Sender<ScanUpdate>) {
     match scan_inner(&root, &tx) {
-        Ok(tree) => {
-            let _ = tx.send(ScanUpdate::Complete(tree));
+        Ok((tree, warnings)) => {
+            let _ = tx.send(ScanUpdate::Complete {
+                root: tree,
+                warnings,
+            });
         }
         Err(e) => {
             let _ = tx.send(ScanUpdate::Error(format!("{e:#}")));
@@ -51,20 +95,24 @@ pub fn scan(root: PathBuf, tx: Sender<ScanUpdate>) {
     }
 }
 
-fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> {
+fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<(DiskNode, ScanWarnings)> {
     let walker = build_walk(root).build();
 
     let mut entries: Vec<RawEntry> = Vec::new();
     let mut files_found: u64 = 0;
     let mut bytes_found: u64 = 0;
     let mut batch_paths = Vec::with_capacity(SCAN_BATCH_SIZE);
+    let mut warnings = ScanWarnings::default();
     #[cfg(unix)]
     let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
 
     for result in walker {
         let entry = match result {
             Ok(e) => e,
-            Err(_) => continue, // permission errors, broken symlinks, etc.
+            Err(error) => {
+                warnings.push(format!("walk error: {error}"));
+                continue;
+            }
         };
 
         let path = entry.path().to_path_buf();
@@ -83,6 +131,7 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
                 &mut entries,
                 &mut files_found,
                 &mut bytes_found,
+                &mut warnings,
                 tx,
                 #[cfg(unix)]
                 &mut seen_inodes,
@@ -97,6 +146,7 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
             &mut entries,
             &mut files_found,
             &mut bytes_found,
+            &mut warnings,
             tx,
             #[cfg(unix)]
             &mut seen_inodes,
@@ -112,15 +162,23 @@ fn scan_inner(root: &Path, tx: &Sender<ScanUpdate>) -> anyhow::Result<DiskNode> 
     // Build tree from flat entries
     let mut tree = build_tree(root, &entries);
     tree.sort_children_by_size();
-    Ok(tree)
+    Ok((tree, warnings))
 }
 
-fn process_batch(paths: Vec<PathBuf>) -> Vec<ProcessedEntry> {
-    paths.into_par_iter().filter_map(process_path).collect()
+fn process_batch(paths: Vec<PathBuf>) -> Vec<ProcessPathOutcome> {
+    paths.into_par_iter().map(process_path).collect()
 }
 
-fn process_path(path: PathBuf) -> Option<ProcessedEntry> {
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
+fn process_path(path: PathBuf) -> ProcessPathOutcome {
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            return ProcessPathOutcome::Warning(format!(
+                "metadata error for {}: {error}",
+                path.display()
+            ))
+        }
+    };
 
     let node_type = if metadata.file_type().is_symlink() {
         NodeType::Symlink
@@ -130,7 +188,7 @@ fn process_path(path: PathBuf) -> Option<ProcessedEntry> {
         NodeType::File
     };
 
-    Some(ProcessedEntry {
+    ProcessPathOutcome::Entry(ProcessedEntry {
         path,
         size: if node_type == NodeType::Dir {
             0
@@ -149,14 +207,23 @@ fn process_path(path: PathBuf) -> Option<ProcessedEntry> {
 }
 
 fn absorb_processed_entries(
-    processed: Vec<ProcessedEntry>,
+    processed: Vec<ProcessPathOutcome>,
     entries: &mut Vec<RawEntry>,
     files_found: &mut u64,
     bytes_found: &mut u64,
+    warnings: &mut ScanWarnings,
     tx: &Sender<ScanUpdate>,
     #[cfg(unix)] seen_inodes: &mut HashSet<(u64, u64)>,
 ) {
     for entry in processed {
+        let entry = match entry {
+            ProcessPathOutcome::Entry(entry) => entry,
+            ProcessPathOutcome::Warning(message) => {
+                warnings.push(message);
+                continue;
+            }
+        };
+
         *files_found += 1;
 
         let size = effective_entry_size(
@@ -304,8 +371,9 @@ mod tests {
         // Drain until Complete
         let mut tree = None;
         for msg in rx {
-            if let ScanUpdate::Complete(t) = msg {
-                tree = Some(t);
+            if let ScanUpdate::Complete { root, warnings } = msg {
+                assert_eq!(warnings.skipped_entries, 0);
+                tree = Some(root);
                 break;
             }
         }
@@ -331,8 +399,9 @@ mod tests {
 
         let mut tree = None;
         for msg in rx {
-            if let ScanUpdate::Complete(t) = msg {
-                tree = Some(t);
+            if let ScanUpdate::Complete { root, warnings } = msg {
+                assert_eq!(warnings.skipped_entries, 0);
+                tree = Some(root);
                 break;
             }
         }
@@ -359,8 +428,9 @@ mod tests {
 
         let mut tree = None;
         for msg in rx {
-            if let ScanUpdate::Complete(t) = msg {
-                tree = Some(t);
+            if let ScanUpdate::Complete { root, warnings } = msg {
+                assert_eq!(warnings.skipped_entries, 0);
+                tree = Some(root);
                 break;
             }
         }
@@ -371,5 +441,31 @@ mod tests {
             "hard-linked file should not double-count bytes"
         );
         assert_eq!(tree.total_files(), 2);
+    }
+
+    #[test]
+    fn test_process_path_reports_missing_entry() {
+        let missing = PathBuf::from("/definitely/missing/dusk-entry");
+
+        let outcome = process_path(missing.clone());
+
+        match outcome {
+            ProcessPathOutcome::Warning(message) => {
+                assert!(message.contains("metadata error"));
+                assert!(message.contains(&missing.display().to_string()));
+            }
+            ProcessPathOutcome::Entry(_) => panic!("missing path should produce a warning"),
+        }
+    }
+
+    #[test]
+    fn test_scan_warnings_summary_uses_first_sample() {
+        let mut warnings = ScanWarnings::default();
+        warnings.push("first issue".into());
+        warnings.push("second issue".into());
+
+        let summary = warnings.summary().unwrap();
+        assert!(summary.contains("2 entries"));
+        assert!(summary.contains("first issue"));
     }
 }
