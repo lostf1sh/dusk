@@ -5,6 +5,7 @@ use ratatui::widgets::StatefulWidget;
 
 use crate::model::node::{DiskNode, NodeType};
 use crate::tui::filter::FilterCriteria;
+use crate::tui::text::truncate_to_width;
 use crate::tui::theme::Theme;
 use crate::tui::views::tree::filter_visible_child_indices;
 
@@ -26,6 +27,12 @@ pub struct TreemapState {
     pub cached_rects: Vec<TreemapRect>,
     pub cached_area: Rect,
     cached_visible: Vec<usize>,
+}
+
+impl Default for TreemapState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TreemapState {
@@ -168,7 +175,7 @@ impl StatefulWidget for TreemapView<'_> {
 
             // Draw name label if enough space
             if rect.width >= 3 && rect.height >= 1 {
-                let label = truncate_name(&rect.name, rect.width as usize - 1);
+                let label = truncate_to_width(&rect.name, rect.width as usize - 1);
                 let label_style = if is_selected {
                     Style::default()
                         .fg(Color::White)
@@ -183,7 +190,7 @@ impl StatefulWidget for TreemapView<'_> {
             // Draw size label on second row if space
             if rect.width >= 5 && rect.height >= 2 {
                 let size_label = humansize::format_size(rect.size, humansize::BINARY);
-                let size_label = truncate_name(&size_label, rect.width as usize - 1);
+                let size_label = truncate_to_width(&size_label, rect.width as usize - 1);
                 let size_style = if is_selected {
                     Style::default().fg(Color::LightYellow).bg(color)
                 } else {
@@ -204,16 +211,6 @@ pub fn visible_treemap_child_indices(
         .into_iter()
         .filter(|&i| node.children.get(i).is_some_and(|child| child.size > 0))
         .collect()
-}
-
-fn truncate_name(name: &str, max_len: usize) -> String {
-    if name.len() <= max_len {
-        name.to_string()
-    } else if max_len > 2 {
-        format!("{}..", &name[..max_len - 2])
-    } else {
-        name[..max_len].to_string()
-    }
 }
 
 /// Layout only the given child indices (e.g. after applying the same filter as the tree view).
@@ -489,5 +486,22 @@ mod tests {
             .push(DiskNode::new("ten".into(), 10, NodeType::File, 1));
 
         assert_eq!(visible_treemap_child_indices(&node, None), vec![1]);
+    }
+
+    #[test]
+    fn test_unicode_labels_do_not_panic_when_truncated() {
+        let mut node = DiskNode::new("root".into(), 10, NodeType::Dir, 0);
+        node.children.push(DiskNode::new(
+            "日本語ファイル名".into(),
+            10,
+            NodeType::File,
+            1,
+        ));
+
+        let rects = squarify_layout_filtered(&node, Rect::new(0, 0, 4, 2), &[0]);
+        assert_eq!(rects.len(), 1);
+
+        let label = truncate_to_width(&rects[0].name, 3);
+        assert!(!label.is_empty());
     }
 }

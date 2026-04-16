@@ -3,6 +3,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 
+use crate::tui::text::{display_width, fit_to_width};
+
 fn char_count(s: &str) -> usize {
     s.chars().count()
 }
@@ -36,7 +38,7 @@ impl Widget for TextInput<'_> {
         let cursor_style = Style::default().fg(Color::Black).bg(Color::White);
 
         // Render label
-        let label_len = self.label.len() as u16;
+        let label_len = display_width(self.label) as u16;
         buf.set_string(area.x, area.y, self.label, label_style);
 
         // Render text
@@ -49,16 +51,18 @@ impl Widget for TextInput<'_> {
         } else {
             0
         };
-        let visible_text: String = self
-            .query
-            .chars()
-            .skip(visible_start)
-            .take(available)
-            .collect();
+        let visible_source: String = self.query.chars().skip(visible_start).collect();
+        let visible_text = fit_to_width(&visible_source, available);
         buf.set_string(text_start, area.y, &visible_text, text_style);
 
         // Render cursor
-        let cursor_screen_pos = text_start + (self.cursor - visible_start) as u16;
+        let prefix: String = self
+            .query
+            .chars()
+            .skip(visible_start)
+            .take(self.cursor.saturating_sub(visible_start))
+            .collect();
+        let cursor_screen_pos = text_start + display_width(&prefix) as u16;
         if cursor_screen_pos < area.x + area.width {
             let cursor_char = self.query.chars().nth(self.cursor).unwrap_or(' ');
             buf.set_string(
@@ -76,6 +80,12 @@ impl Widget for TextInput<'_> {
 pub struct TextInputState {
     pub query: String,
     pub cursor: usize,
+}
+
+impl Default for TextInputState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TextInputState {
@@ -203,6 +213,18 @@ mod tests {
         state.move_left();
         assert_eq!(state.cursor, 0);
         state.move_right();
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn test_delete_unicode_character() {
+        let mut state = TextInputState {
+            query: "a界b".into(),
+            cursor: 1,
+        };
+
+        state.delete();
+        assert_eq!(state.query, "ab");
         assert_eq!(state.cursor, 1);
     }
 }

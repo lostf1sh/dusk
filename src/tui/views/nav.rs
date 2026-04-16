@@ -12,6 +12,12 @@ pub struct ViewNavState {
     pub selected_name: String,
 }
 
+impl Default for ViewNavState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ViewNavState {
     pub fn new() -> Self {
         Self {

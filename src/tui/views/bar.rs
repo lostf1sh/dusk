@@ -5,10 +5,17 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, StatefulWidget};
 
 use crate::model::node::DiskNode;
+use crate::tui::text::display_width;
 use crate::tui::theme::Theme;
 
 pub struct BarState {
     pub list_state: ListState,
+}
+
+impl Default for BarState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BarState {
@@ -73,7 +80,8 @@ impl StatefulWidget for BarView<'_> {
 
                 // Calculate spacing
                 let pct_str = format!("{pct:5.1}%");
-                let used = bar_width + 1 + pct_str.len() + 2 + name.len() + 2 + size_str.len();
+                let used =
+                    bar_width + 1 + pct_str.len() + 2 + display_width(&name) + 2 + size_str.len();
                 let available = area.width as usize;
                 let padding = if used < available {
                     available - used

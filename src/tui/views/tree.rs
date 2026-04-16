@@ -8,6 +8,7 @@ use ratatui::widgets::{List, ListItem, ListState, StatefulWidget};
 
 use crate::model::node::{DiskNode, NodeType};
 use crate::tui::filter::FilterCriteria;
+use crate::tui::text::display_width;
 use crate::tui::theme::Theme;
 
 /// A single visible row in the flattened tree.
@@ -30,6 +31,12 @@ pub struct TreeViewState {
     pub cursor: usize,
     pub expanded: HashSet<Vec<String>>,
     pub list_state: ListState,
+}
+
+impl Default for TreeViewState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TreeViewState {
@@ -255,11 +262,12 @@ impl StatefulWidget for TreeView<'_> {
                 let name_style = self.theme.node_style(&row.node_type);
                 let size_str = format_size(row.size, BINARY);
                 let size_style = self.theme.size_style(row.size, self.root_size);
+                let rendered_name = format!("{indent}{icon}{}", row.name);
 
-                let name_span = Span::styled(format!("{indent}{icon}{}", row.name), name_style);
+                let name_span = Span::styled(rendered_name.clone(), name_style);
 
                 // Calculate padding to right-align size
-                let used = indent.len() + icon.len() + row.name.len();
+                let used = display_width(&rendered_name);
                 let available = area.width as usize;
                 let size_len = size_str.len();
                 let padding = if used + size_len + 1 < available {
@@ -491,5 +499,16 @@ mod tests {
 
         state.clamp_cursor(0);
         assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn test_resolve_fs_path_with_unicode_name() {
+        let mut tree = DiskNode::new("root".into(), 10, NodeType::Dir, 0);
+        tree.children
+            .push(DiskNode::new("日本語.txt".into(), 10, NodeType::File, 1));
+
+        let root_path = std::path::Path::new("/tmp/test");
+        let fs_path = resolve_fs_path(root_path, &tree, &[0]).unwrap();
+        assert_eq!(fs_path, std::path::PathBuf::from("/tmp/test/日本語.txt"));
     }
 }
