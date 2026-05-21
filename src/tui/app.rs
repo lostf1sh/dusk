@@ -469,7 +469,7 @@ impl App {
                 })
                 .collect();
 
-            scored.sort_by(|a, b| b.score.cmp(&a.score));
+            scored.sort_by_key(|entry| std::cmp::Reverse(entry.score));
             scored.truncate(20);
 
             *results = scored;

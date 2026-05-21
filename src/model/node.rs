@@ -53,7 +53,8 @@ impl DiskNode {
 
     /// Recursively sort children by size (largest first).
     pub fn sort_children_by_size(&mut self) {
-        self.children.sort_by(|a, b| b.size.cmp(&a.size));
+        self.children
+            .sort_by_key(|child| std::cmp::Reverse(child.size));
         for child in &mut self.children {
             child.sort_children_by_size();
         }
