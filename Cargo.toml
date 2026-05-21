@@ -1,6 +1,6 @@
 [package]
 name = "dusk"
-version = "0.1.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["dusk contributors"]
 description = "Interactive disk usage analyzer with treemap visualization for your terminal"
