@@ -77,19 +77,46 @@ download_release() {
     fi
 
     echo "Installing to $INSTALL_DIR..."
-    if [ "$FORCE" = "true" ] || [ -w "$INSTALL_DIR" ]; then
-        mv "$binary" "$INSTALL_DIR/dusk"
-        chmod +x "$INSTALL_DIR/dusk"
+    if install_binary "$binary" "$INSTALL_DIR/dusk"; then
         echo "✓ Installed dusk to $INSTALL_DIR/dusk"
-    else
-        echo "Error: Cannot write to $INSTALL_DIR (try with sudo)"
-        echo "  sudo mv $binary $INSTALL_DIR/dusk"
         rm -rf "$tmpdir"
+        return 0
+    fi
+
+    echo "Error: Could not install to $INSTALL_DIR."
+    echo "Binary is still available at: $binary"
+    echo "  sudo mv \"$binary\" \"$INSTALL_DIR/dusk\" && sudo chmod +x \"$INSTALL_DIR/dusk\""
+    return 1
+}
+
+install_binary() {
+    local src="$1"
+    local dst="$2"
+    local dst_dir
+    dst_dir="$(dirname "$dst")"
+
+    if [ "$FORCE" = "true" ] || [ -w "$dst_dir" ]; then
+        mv "$src" "$dst" && chmod +x "$dst"
+        return $?
+    fi
+
+    if ! command -v sudo >/dev/null 2>&1; then
+        echo "Error: $dst_dir is not writable and sudo is not available."
         return 1
     fi
 
-    rm -rf "$tmpdir"
-    return 0
+    echo "$dst_dir is not writable; escalating with sudo..."
+    local have_tty=0
+    if (: < /dev/tty) 2>/dev/null; then
+        have_tty=1
+    fi
+
+    if [ "$have_tty" = "1" ]; then
+        sudo -p "[sudo] password for %u: " mv "$src" "$dst" < /dev/tty && \
+            sudo chmod +x "$dst" < /dev/tty
+    else
+        sudo -n mv "$src" "$dst" 2>/dev/null && sudo -n chmod +x "$dst" 2>/dev/null
+    fi
 }
 
 install_from_source() {
@@ -104,19 +131,18 @@ install_from_source() {
     git clone --depth 1 "https://github.com/$REPO.git" "$tmpdir/dusk"
     cd "$tmpdir/dusk"
     cargo build --release
-    
-    if [ "$FORCE" = "true" ] || [ -w "$INSTALL_DIR" ]; then
-        cp "target/release/dusk" "$INSTALL_DIR/dusk"
-        chmod +x "$INSTALL_DIR/dusk"
+
+    local built="$tmpdir/dusk/target/release/dusk"
+    if install_binary "$built" "$INSTALL_DIR/dusk"; then
         echo "✓ Installed dusk to $INSTALL_DIR/dusk"
-    else
-        echo "Error: Cannot write to $INSTALL_DIR (try with sudo)"
-        echo "  sudo cp target/release/dusk $INSTALL_DIR/dusk"
-        return 1
+        rm -rf "$tmpdir"
+        return 0
     fi
-    
-    rm -rf "$tmpdir"
-    return 0
+
+    echo "Error: Could not install to $INSTALL_DIR."
+    echo "Built binary is still available at: $built"
+    echo "  sudo cp \"$built\" \"$INSTALL_DIR/dusk\" && sudo chmod +x \"$INSTALL_DIR/dusk\""
+    return 1
 }
 
 main() {

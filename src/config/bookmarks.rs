@@ -76,6 +76,10 @@ impl BookmarkStore {
 }
 
 fn config_path() -> PathBuf {
+    if let Some(override_dir) = std::env::var_os("DUSK_CONFIG_DIR") {
+        return PathBuf::from(override_dir).join("bookmarks.toml");
+    }
+
     dirs::config_dir()
         .unwrap_or_else(|| {
             dirs::home_dir()
