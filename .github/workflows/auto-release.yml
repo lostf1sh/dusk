@@ -1,0 +1,159 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  compute-version:
+    name: Compute next auto version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.calc.outputs.version }}
+      tag: ${{ steps.calc.outputs.tag }}
+      skip: ${{ steps.calc.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: calc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          existing=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          if [ -n "$existing" ]; then
+            echo "Manual semver tag $existing already at HEAD; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base=$(grep -E '^version\s*=' Cargo.toml | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          base=${base%%-*}
+          base=${base%%+*}
+
+          highest=$(git tag --list "v${base}-[0-9]*" \
+            | sed -E "s/^v${base}-0*([0-9]+).*/\1/" \
+            | grep -E '^[0-9]+$' \
+            | sort -n | tail -n1 || true)
+          next=$((${highest:-0} + 1))
+          counter=$(printf "%03d" "$next")
+
+          version="${base}-${counter}"
+          tag="v${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Computed: version=${version} tag=${tag}"
+
+  build-linux:
+    name: Build Linux x86_64
+    needs: compute-version
+    if: needs.compute-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch Cargo.toml version
+        run: |
+          sed -i -E "0,/^version = .*/s//version = \"${{ needs.compute-version.outputs.version }}\"/" Cargo.toml
+
+      - name: Build
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --release --target x86_64-unknown-linux-musl
+          cd target/x86_64-unknown-linux-musl/release
+          tar czf dusk-x86_64-unknown-linux-musl.tar.gz dusk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: target/x86_64-unknown-linux-musl/release/dusk-x86_64-unknown-linux-musl.tar.gz
+
+  build-macos-x86_64:
+    name: Build macOS x86_64
+    needs: compute-version
+    if: needs.compute-version.outputs.skip != 'true'
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch Cargo.toml version
+        run: |
+          /usr/bin/sed -i '' -E "1,/^version = .*/s//version = \"${{ needs.compute-version.outputs.version }}\"/" Cargo.toml
+
+      - name: Build
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          cd target/x86_64-apple-darwin/release
+          tar czf dusk-x86_64-apple-darwin.tar.gz dusk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: target/x86_64-apple-darwin/release/dusk-x86_64-apple-darwin.tar.gz
+
+  build-macos-arm64:
+    name: Build macOS ARM64
+    needs: compute-version
+    if: needs.compute-version.outputs.skip != 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch Cargo.toml version
+        run: |
+          /usr/bin/sed -i '' -E "1,/^version = .*/s//version = \"${{ needs.compute-version.outputs.version }}\"/" Cargo.toml
+
+      - name: Build
+        run: |
+          rustup target add aarch64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+          cd target/aarch64-apple-darwin/release
+          tar czf dusk-aarch64-apple-darwin.tar.gz dusk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: target/aarch64-apple-darwin/release/dusk-aarch64-apple-darwin.tar.gz
+
+  release:
+    name: Publish auto release
+    needs: [compute-version, build-linux, build-macos-x86_64, build-macos-arm64]
+    if: needs.compute-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.compute-version.outputs.tag }}
+          name: ${{ needs.compute-version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: artifacts/*.tar.gz
+          generate_release_notes: true
+          prerelease: false
+          make_latest: 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
